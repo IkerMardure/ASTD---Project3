@@ -37,7 +37,8 @@ class TSFConfig:
 	"""Configuration for the aeon TimeSeriesForestClassifier."""
 
 	n_estimators: int = 200
-	min_interval: int = 3
+	# aeon >=1.0 uses "min_interval_length" (not "min_interval").
+	min_interval_length: int = 3
 	n_jobs: int = -1
 	random_state: int | None = 42
 
@@ -59,7 +60,7 @@ class AeonTSFClassifier:
 		self.config = config or TSFConfig()
 		params = {
 			"n_estimators": self.config.n_estimators,
-			"min_interval": self.config.min_interval,
+			"min_interval_length": self.config.min_interval_length,
 			"n_jobs": self.config.n_jobs,
 			"random_state": self.config.random_state,
 		}
