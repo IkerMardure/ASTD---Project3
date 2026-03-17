@@ -33,6 +33,42 @@ Optional parameters (example):
 python experiments/main_run.py --n-train 100 --n-test 40 --n-timestamps 120 --n-estimators 300 --seed 7
 ```
 
+> **Note:** When running on multiple datasets, output CSVs are now named per dataset to avoid overwriting. You can also use `{dataset}` in `--output-csv` to explicitly control where each dataset’s results go.
+
+---
+
+## 🧠 `main_run.py` modes (what each one does)
+
+`experiments/main_run.py` supports 4 execution modes: `benchmarks`, `synthetic`, `train`, and `forecast`. Here’s what each mode does and when to use it:
+
+- **`benchmarks`** (default): Trains each classifier from scratch on the UCR train split and evaluates on the UCR test split.
+  - Produces a results CSV (default `results/benchmark_comparison.csv`).
+  - Does **not** keep trained models or per-instance predictions.
+
+- **`synthetic`**: Runs a very small synthetic experiment (random data) to verify things work.
+  - Useful for quick sanity checks without using UCR data.
+
+- **`train`**: Trains classifiers on the UCR train split and **saves the trained models** to disk.
+  - Saved models live in `trained_models/<dataset>/<classifier>.joblib`.
+  - Produces per-dataset results CSVs of training metrics.
+
+- **`forecast`**: Loads the saved models and runs inference on the UCR test split.
+  - Requires models to be present under `trained_models/` (i.e., run `--mode train` first).
+  - Saves per-instance predictions to `results/predictions/<dataset>/<classifier>.csv`.
+
+### Example workflows
+
+**Train a model once, then forecast later**
+```bash
+python experiments/main_run.py --mode train --datasets ItalyPowerDemand
+python experiments/main_run.py --mode forecast --datasets ItalyPowerDemand
+```
+
+**Run a quick benchmark (no model persistence)**
+```bash
+python experiments/main_run.py
+```
+
 ---
 
 ## 📥 Download recommended UCR datasets
@@ -61,44 +97,67 @@ python data/download_ucr_datasets.py
 
 ---
 
-## � Visualizing time series
+## 📊 Visualizing results (predictions + confusion)
 
-Use the helper functions in `utils/visualize_TS.py` to plot time series from any UCR-style dataset in `data/`.
+The project includes a helper module `utils/visualize_predictions.py` to visualize classifier predictions and errors.
 
 ### Option A — Python API (recommended)
 
 ```python
-from utils.visualize_TS import load_ucr_txt_dataset, generate_one_graph, generate_dataset_graph
+from utils.visualize_predictions import plot_overlay_by_correctness, plot_confusion_matrix
 
-X, y = load_ucr_txt_dataset("data/ItalyPowerDemand/ItalyPowerDemand_TRAIN.txt")
+# Overlay plot: correct series are fully visible, incorrect ones are semi-transparent
+plot_overlay_by_correctness(
+    dataset_name="ItalyPowerDemand",
+    predictions_csv="results/predictions/ItalyPowerDemand/1NN-DTW.csv",
+    save=True,
+)
 
-# Plot a single series
-generate_one_graph(X[0], dataset_name="ItalyPowerDemand", index=0, label=y[0], save=True)
-
-# Plot a small grid of the first 16 series
-generate_dataset_graph(X, dataset_name="ItalyPowerDemand", labels=y, max_series=16, save=True)
+# Confusion matrix (counts)
+plot_confusion_matrix(
+    y_true=[...],
+    y_pred=[...],
+    dataset_name="ItalyPowerDemand",
+    save=True,
+)
 ```
 
 ### Option B — CLI (quick and scriptable)
 
 ```bash
-# Grid plot (default) of the first 16 series
-env PYTHONPATH=. python -m utils.visualize_TS \
-  --input data/ItalyPowerDemand/ItalyPowerDemand_TRAIN.txt \
-  --mode grid \
-  --max-series 16
+# Overlay: per-class colors, transparent = incorrect
+python -m utils.visualize_predictions \
+  --mode overlay \
+  --predictions results/predictions/ItalyPowerDemand/1NN-DTW.csv \
+  --dataset-name ItalyPowerDemand
 
-# Single-series plot (index 3)
-env PYTHONPATH=. python -m utils.visualize_TS \
-  --input data/ItalyPowerDemand/ItalyPowerDemand_TRAIN.txt \
-  --mode one --index 3
+# Overlay for a specific class only (e.g., class "1")
+python -m utils.visualize_predictions \
+  --mode overlay \
+  --predictions results/predictions/ItalyPowerDemand/1NN-DTW.csv \
+  --dataset-name ItalyPowerDemand \
+  --include-labels 1
+
+# Confusion matrix
+python -m utils.visualize_predictions \
+  --mode confusion \
+  --predictions results/predictions/ItalyPowerDemand/1NN-DTW.csv \
+  --dataset-name ItalyPowerDemand
 ```
 
-The generated PNGs are saved into the `visualization/` folder by default (or any folder you pass via `--out-dir`).
+Generated images are saved to `visualization/` by default (or `--out-dir`).
 
 ---
 
-## �📝 Notes
+## 🧩 Where to extend
+
+- Add experiment orchestration and evaluation logic in `experiments/main_run.py` and `experiments/validation.py`.
+- Add new classifiers or baselines under `classifiers/`.
+- Store result outputs (plots, metrics, tables) in `results/`.
+
+---
+
+## 🧠 Notes
 
 - `AeonTSFClassifier` expects time series inputs as NumPy arrays. It accepts 2D arrays (univariate) or 3D arrays (multivariate).
 - If `aeon` is not installed, importing `AeonTSFClassifier` raises an informative `ImportError`.
