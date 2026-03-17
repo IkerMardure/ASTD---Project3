@@ -11,6 +11,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+import joblib
 import numpy as np
 
 from classifiers.benchmarks.suite import (
@@ -28,6 +29,68 @@ def _to_3d_numpy(X: np.ndarray) -> np.ndarray:
 	if arr.ndim == 3:
 		return arr
 	raise ValueError(f"X must be 2D or 3D. Received shape {arr.shape}.")
+
+
+def _sanitize_filename(name: str) -> str:
+	"""Create a filesystem-safe filename from a classifier/dataset name."""
+	# Keep alphanumeric, dash, underscore, dot
+	return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name)
+
+
+def _ensure_dir(path: Path) -> None:
+	path.mkdir(parents=True, exist_ok=True)
+
+
+def _model_path(model_dir: Path, dataset_name: str, classifier_name: str) -> Path:
+	"""Return a full path where a trained model should be saved/loaded."""
+	return Path(model_dir) / dataset_name / f"{_sanitize_filename(classifier_name)}.joblib"
+
+
+def _predictions_path(predictions_dir: Path, dataset_name: str, classifier_name: str) -> Path:
+	"""Return a full path where per-instance predictions should be saved."""
+	return Path(predictions_dir) / dataset_name / f"{_sanitize_filename(classifier_name)}.csv"
+
+
+def save_model(model: Any, path: Path) -> Path:
+	"""Persist a trained model to disk."""
+	_ensure_dir(path.parent)
+	joblib.dump(model, path)
+	return path
+
+
+def load_model(path: Path) -> Any:
+	"""Load a trained model previously saved with :func:`save_model`."""
+	return joblib.load(path)
+
+
+def save_predictions(
+	y_true: np.ndarray,
+	y_pred: np.ndarray,
+	output_path: Path,
+	class_labels: list[str] | None = None,
+) -> Path:
+	"""Save per-instance predictions to a CSV file."""
+	_ensure_dir(output_path.parent)
+
+	# Ensure arrays are 1D and same length
+	y_true = np.asarray(y_true).reshape(-1)
+	y_pred = np.asarray(y_pred).reshape(-1)
+	if y_true.shape[0] != y_pred.shape[0]:
+		raise ValueError("y_true and y_pred must have the same length")
+
+	with output_path.open("w", newline="", encoding="utf-8") as handle:
+		writer = csv.writer(handle)
+		headers = ["index", "y_true", "y_pred"]
+		if class_labels is not None:
+			headers.append("class_labels")
+		writer.writerow(headers)
+		for i, (yt, yp) in enumerate(zip(y_true, y_pred)):
+			row = [i, yt, yp]
+			if class_labels is not None:
+				row.append("|".join(class_labels))
+			writer.writerow(row)
+
+	return output_path
 
 
 def load_ucr_txt_split(data_dir: str | Path, dataset_name: str, split: str) -> tuple[np.ndarray, np.ndarray]:
@@ -69,8 +132,14 @@ def _evaluate_model(
 	y_train: np.ndarray,
 	X_test: np.ndarray,
 	y_test: np.ndarray,
+	model_path: Path | None = None,
+	predictions_path: Path | None = None,
 ) -> dict[str, Any]:
-	"""Fit, predict and score one model, returning metrics."""
+	"""Fit, predict and score one model, returning metrics.
+
+	If `model_path` is provided, the fitted model is saved after training.
+	If `predictions_path` is provided, per-instance predictions are also saved.
+	"""
 	X_train_3d = _to_3d_numpy(X_train)
 	X_test_3d = _to_3d_numpy(X_test)
 
@@ -78,16 +147,25 @@ def _evaluate_model(
 	start_fit = time.perf_counter()
 	model.fit(X_train_3d, y_train)
 	fit_time_s = time.perf_counter() - start_fit
+
+	if model_path is not None:
+		save_model(model, model_path)
+		print(f"  [{dataset_name}] {model_name} — saved model to {model_path}", flush=True)
+
 	print(f"  [{dataset_name}] {model_name} — fit done ({fit_time_s:.1f}s). Predicting...", flush=True)
 
 	start_pred = time.perf_counter()
 	y_pred = model.predict(X_test_3d)
 	predict_time_s = time.perf_counter() - start_pred
 
+	if predictions_path is not None:
+		save_predictions(y_test, y_pred, predictions_path)
+		print(f"  [{dataset_name}] {model_name} — saved predictions to {predictions_path}", flush=True)
+
 	accuracy = float(np.mean(np.asarray(y_pred) == np.asarray(y_test)))
 	print(f"  [{dataset_name}] {model_name} — accuracy={accuracy:.4f}, predict={predict_time_s:.1f}s", flush=True)
 
-	return {
+	row: dict[str, Any] = {
 		"dataset": dataset_name,
 		"classifier": model_name,
 		"accuracy": accuracy,
@@ -96,6 +174,49 @@ def _evaluate_model(
 		"status": "ok",
 		"error": "",
 	}
+	if model_path is not None:
+		row["model_path"] = str(model_path)
+	if predictions_path is not None:
+		row["predictions_path"] = str(predictions_path)
+
+	return row
+
+
+def _evaluate_loaded_model(
+	model: Any,
+	model_name: str,
+	dataset_name: str,
+	X_test: np.ndarray,
+	y_test: np.ndarray,
+	predictions_path: Path | None = None,
+) -> dict[str, Any]:
+	"""Predict and score a pre-trained model, optionally saving predictions."""
+	X_test_3d = _to_3d_numpy(X_test)
+
+	print(f"  [{dataset_name}] {model_name} — predicting on {X_test_3d.shape[0]} samples...", flush=True)
+	start_pred = time.perf_counter()
+	y_pred = model.predict(X_test_3d)
+	predict_time_s = time.perf_counter() - start_pred
+
+	if predictions_path is not None:
+		save_predictions(y_test, y_pred, predictions_path)
+		print(f"  [{dataset_name}] {model_name} — saved predictions to {predictions_path}", flush=True)
+
+	accuracy = float(np.mean(np.asarray(y_pred) == np.asarray(y_test)))
+	print(f"  [{dataset_name}] {model_name} — accuracy={accuracy:.4f}, predict={predict_time_s:.1f}s", flush=True)
+
+	row: dict[str, Any] = {
+		"dataset": dataset_name,
+		"classifier": model_name,
+		"accuracy": accuracy,
+		"fit_time_s": 0.0,
+		"predict_time_s": predict_time_s,
+		"status": "ok",
+		"error": "",
+	}
+	if predictions_path is not None:
+		row["predictions_path"] = str(predictions_path)
+	return row
 
 
 def run_benchmark_suite(
@@ -191,6 +312,185 @@ def run_benchmark_suite(
 	return rows
 
 
+def run_train_suite(
+	dataset_name: str,
+	data_dir: str | Path = "data",
+	benchmark_names: list[str] | None = None,
+	include_tsf: bool = True,
+	random_state: int | None = 42,
+	n_estimators_tsf: int = 200,
+	model_dir: str | Path = "trained_models",
+) -> list[dict[str, Any]]:
+	"""Train classifiers on a dataset and persist the trained models."""
+	print(f"\n=== Dataset: {dataset_name} (train + save) ===", flush=True)
+	print(f"  Loading data...", flush=True)
+	X_train, y_train, X_test, y_test = load_ucr_dataset(data_dir=data_dir, dataset_name=dataset_name)
+	print(f"  Loaded: train={X_train.shape}, test={X_test.shape}", flush=True)
+
+	selected_specs = list(DEFAULT_BENCHMARK_SPECS)
+	if benchmark_names is not None:
+		requested = {name.strip().lower() for name in benchmark_names if name.strip()}
+		selected_specs = [spec for spec in DEFAULT_BENCHMARK_SPECS if spec.name.lower() in requested]
+
+	rows: list[dict[str, Any]] = []
+
+	if include_tsf:
+		try:
+			tsfc = AeonTSFClassifier(
+				config=TSFConfig(
+					n_estimators=n_estimators_tsf,
+					random_state=random_state,
+				)
+			)
+			rows.append(
+				_evaluate_model(
+					model=tsfc,
+					model_name="TSF (ours)",
+					dataset_name=dataset_name,
+					X_train=X_train,
+					y_train=y_train,
+					X_test=X_test,
+					y_test=y_test,
+					model_path=_model_path(Path(model_dir), dataset_name, "TSF (ours)"),
+				)
+			)
+		except Exception as exc:
+			print(f"  [{dataset_name}] TSF (ours) — ERROR: {type(exc).__name__}: {exc}", flush=True)
+			rows.append(
+				{
+					"dataset": dataset_name,
+					"classifier": "TSF (ours)",
+					"accuracy": np.nan,
+					"fit_time_s": np.nan,
+					"predict_time_s": np.nan,
+					"status": "error",
+					"error": f"{type(exc).__name__}: {exc}",
+				}
+			)
+
+	for spec in selected_specs:
+		try:
+			model = instantiate_benchmark(spec=spec, random_state=random_state)
+			rows.append(
+				_evaluate_model(
+					model=model,
+					model_name=spec.name,
+					dataset_name=dataset_name,
+					X_train=X_train,
+					y_train=y_train,
+					X_test=X_test,
+					y_test=y_test,
+					model_path=_model_path(Path(model_dir), dataset_name, spec.name),
+				)
+			)
+		except Exception as exc:
+			print(f"  [{dataset_name}] {spec.name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+			rows.append(
+				{
+					"dataset": dataset_name,
+					"classifier": spec.name,
+					"accuracy": np.nan,
+					"fit_time_s": np.nan,
+					"predict_time_s": np.nan,
+					"status": "error",
+					"error": f"{type(exc).__name__}: {exc}",
+				}
+			)
+
+	print(f"=== {dataset_name} done ===", flush=True)
+	return rows
+
+
+def run_predict_suite(
+	dataset_name: str,
+	data_dir: str | Path = "data",
+	benchmark_names: list[str] | None = None,
+	include_tsf: bool = True,
+	random_state: int | None = 42,
+	n_estimators_tsf: int = 200,
+	model_dir: str | Path = "trained_models",
+	predictions_dir: str | Path = "results/predictions",
+) -> list[dict[str, Any]]:
+	"""Predict using pre-trained models and save per-instance predictions."""
+	print(f"\n=== Dataset: {dataset_name} (predict) ===", flush=True)
+	print(f"  Loading data...", flush=True)
+	_, _, X_test, y_test = load_ucr_dataset(data_dir=data_dir, dataset_name=dataset_name)
+	print(f"  Loaded: test={X_test.shape}", flush=True)
+
+	selected_specs = list(DEFAULT_BENCHMARK_SPECS)
+	if benchmark_names is not None:
+		requested = {name.strip().lower() for name in benchmark_names if name.strip()}
+		selected_specs = [spec for spec in DEFAULT_BENCHMARK_SPECS if spec.name.lower() in requested]
+
+	rows: list[dict[str, Any]] = []
+
+	if include_tsf:
+		model_name = "TSF (ours)"
+		model_path = _model_path(Path(model_dir), dataset_name, model_name)
+		predictions_path = _predictions_path(Path(predictions_dir), dataset_name, model_name)
+		try:
+			model = load_model(model_path)
+			rows.append(
+				_evaluate_loaded_model(
+					model=model,
+					model_name=model_name,
+					dataset_name=dataset_name,
+					X_test=X_test,
+					y_test=y_test,
+					predictions_path=predictions_path,
+				)
+			)
+		except Exception as exc:
+			print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+			rows.append(
+				{
+					"dataset": dataset_name,
+					"classifier": model_name,
+					"accuracy": np.nan,
+					"fit_time_s": np.nan,
+					"predict_time_s": np.nan,
+					"status": "error",
+					"error": f"{type(exc).__name__}: {exc}",
+				}
+			)
+
+	for spec in selected_specs:
+		model_name = spec.name
+		model_path = _model_path(Path(model_dir), dataset_name, model_name)
+		predictions_path = _predictions_path(Path(predictions_dir), dataset_name, model_name)
+		try:
+			model = load_model(model_path)
+			rows.append(
+				_evaluate_loaded_model(
+					model=model,
+					model_name=model_name,
+					dataset_name=dataset_name,
+					X_test=X_test,
+					y_test=y_test,
+					predictions_path=predictions_path,
+				)
+			)
+		except Exception as exc:
+			print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+			rows.append(
+				{
+					"dataset": dataset_name,
+					"classifier": model_name,
+					"accuracy": np.nan,
+					"fit_time_s": np.nan,
+					"predict_time_s": np.nan,
+					"status": "error",
+					"error": f"{type(exc).__name__}: {exc}",
+				}
+			)
+
+	print(f"=== {dataset_name} done ===", flush=True)
+	return rows
+
+# Backwards compatibility: old name
+run_forecast_suite = run_predict_suite
+
+
 def run_benchmarks_on_datasets(
 	datasets: list[str],
 	data_dir: str | Path = "data",
@@ -217,10 +517,19 @@ def run_benchmarks_on_datasets(
 
 
 def save_results_csv(rows: list[dict[str, Any]], output_path: str | Path) -> Path:
-	"""Save benchmark result rows to CSV."""
+	"""Save result rows to CSV.
+
+	Automatically includes any extra fields that appear in the rows (e.g., model_path,
+	predictions_path) so the output captures all recorded metadata.
+	"""
 	path = Path(output_path)
 	path.parent.mkdir(parents=True, exist_ok=True)
-	fieldnames = ["dataset", "classifier", "accuracy", "fit_time_s", "predict_time_s", "status", "error"]
+
+	base_fields = ["dataset", "classifier", "accuracy", "fit_time_s", "predict_time_s", "status", "error"]
+	extra_fields = sorted(
+		{k for row in rows for k in row.keys() if k not in base_fields}
+	)
+	fieldnames = base_fields + extra_fields
 
 	with path.open("w", newline="", encoding="utf-8") as handle:
 		writer = csv.DictWriter(handle, fieldnames=fieldnames)

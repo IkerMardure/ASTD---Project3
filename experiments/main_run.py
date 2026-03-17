@@ -22,6 +22,10 @@ from classifiers.benchmarks.suite import DEFAULT_BENCHMARK_SPECS
 from experiments.validation import (
 	format_results_table,
 	run_benchmarks_on_datasets,
+	run_train_suite,
+	run_predict_suite,
+	# Keep old name for backward compatibility
+	run_forecast_suite,
 	save_results_csv,
 )
 
@@ -44,13 +48,40 @@ def _parse_csv_list(raw: str) -> list[str]:
 	return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _sanitize_filename(name: str) -> str:
+	"""Make a string safe to use in a filename."""
+	return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name)
+
+
+def _resolve_output_path(output_template: str, dataset: str, multiple_datasets: bool) -> str:
+	"""Resolve an output CSV path for a given dataset.
+
+	If the template contains '{dataset}', it is substituted.
+	If multiple datasets are being processed (or the template is the default), the dataset name is inserted before the file extension.
+	"""
+	if "{dataset}" in output_template:
+		return output_template.format(dataset=_sanitize_filename(dataset))
+
+	if multiple_datasets:
+		path = Path(output_template)
+		stem = path.stem
+		suffix = path.suffix
+		return str(path.with_name(f"{stem}_{_sanitize_filename(dataset)}{suffix}"))
+
+	return output_template
+
+
 def main() -> None:
 	parser = argparse.ArgumentParser(description="Run TSF experiments and benchmark comparisons.")
 	parser.add_argument(
 		"--mode",
-		choices=["benchmarks", "synthetic"],
+		choices=["benchmarks", "synthetic", "train", "predict", "forecast"],
 		default="benchmarks",
-		help="Execution mode. 'benchmarks' compares TSF vs benchmark algorithms on UCR data.",
+		help=(
+			"Execution mode. 'benchmarks' compares TSF vs benchmark algorithms on UCR data; "
+			"'train' trains models and saves them; 'predict' (alias 'forecast') loads saved models and runs prediction; "
+			"'synthetic' runs a quick synthetic TSF experiment."
+		),
 	)
 	parser.add_argument("--seed", type=int, default=42)
 
@@ -90,6 +121,18 @@ def main() -> None:
 		help="Path to write benchmark comparison CSV output.",
 	)
 	parser.add_argument(
+		"--model-dir",
+		type=str,
+		default="trained_models",
+		help="Directory where trained models are saved/loaded.",
+	)
+	parser.add_argument(
+		"--predictions-dir",
+		type=str,
+		default="results/predictions",
+		help="Directory where per-instance prediction CSVs are written during forecasting.",
+	)
+	parser.add_argument(
 		"--no-tsf",
 		action="store_true",
 		help="Exclude TSF (ours) from benchmark runs.",
@@ -114,18 +157,84 @@ def main() -> None:
 	datasets = _parse_csv_list(args.datasets)
 	benchmark_names = _parse_csv_list(args.benchmarks) if args.benchmarks else None
 
-	rows = run_benchmarks_on_datasets(
-		datasets=datasets,
-		data_dir=args.data_dir,
-		benchmark_names=benchmark_names,
-		include_tsf=not args.no_tsf,
-		random_state=args.seed,
-		n_estimators_tsf=args.n_estimators,
-	)
+	# Resolve output file naming to avoid overwriting when running with multiple datasets.
+	# If the template includes {dataset}, it will be substituted.
+	# Otherwise, when using the default output path, we insert the dataset name to keep runs separate.
+	use_dataset_in_name = len(datasets) > 1 or args.output_csv == "results/benchmark_comparison.csv"
+	output_path = _resolve_output_path(args.output_csv, datasets[0] if datasets else "", use_dataset_in_name)
 
-	print(format_results_table(rows))
-	output_path = save_results_csv(rows=rows, output_path=args.output_csv)
-	print(f"\nSaved benchmark results to: {output_path}")
+	if args.mode == "benchmarks":
+		rows = run_benchmarks_on_datasets(
+			datasets=datasets,
+			data_dir=args.data_dir,
+			benchmark_names=benchmark_names,
+			include_tsf=not args.no_tsf,
+			random_state=args.seed,
+			n_estimators_tsf=args.n_estimators,
+		)
+
+		print(format_results_table(rows))
+		# Use a combined output file for all datasets (default or explicitly provided)
+		combined_output_path = (
+			args.output_csv
+			if len(datasets) == 1
+			else _resolve_output_path(args.output_csv, "all", True)
+		)
+		combined_output_path = save_results_csv(rows=rows, output_path=combined_output_path)
+		print(f"\nSaved combined results to: {combined_output_path}")
+
+		# Also save per-dataset files when multiple datasets are present
+		if len(datasets) > 1:
+			for ds in datasets:
+				per_dataset_path = _resolve_output_path(args.output_csv, ds, True)
+				per_rows = [r for r in rows if r.get("dataset") == ds]
+				save_results_csv(rows=per_rows, output_path=per_dataset_path)
+				print(f"Saved per-dataset results to: {per_dataset_path}")
+
+	elif args.mode == "train":
+		rows = []
+		for dataset in datasets:
+			rows.extend(
+				run_train_suite(
+					dataset_name=dataset,
+					data_dir=args.data_dir,
+					benchmark_names=benchmark_names,
+					include_tsf=not args.no_tsf,
+					random_state=args.seed,
+					n_estimators_tsf=args.n_estimators,
+					model_dir=args.model_dir,
+				)
+			)
+		for dataset in datasets:
+			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
+			per_rows = [r for r in rows if r.get("dataset") == dataset]
+			save_results_csv(rows=per_rows, output_path=per_dataset_path)
+			print(f"Saved results to: {per_dataset_path}")
+
+	elif args.mode in ("predict", "forecast"):
+		rows = []
+		for dataset in datasets:
+			rows.extend(
+				run_predict_suite(
+					dataset_name=dataset,
+					data_dir=args.data_dir,
+					benchmark_names=benchmark_names,
+					include_tsf=not args.no_tsf,
+					random_state=args.seed,
+					n_estimators_tsf=args.n_estimators,
+					model_dir=args.model_dir,
+					predictions_dir=args.predictions_dir,
+				)
+			)
+		for dataset in datasets:
+			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
+			per_rows = [r for r in rows if r.get("dataset") == dataset]
+			save_results_csv(rows=per_rows, output_path=per_dataset_path)
+			print(f"Saved results to: {per_dataset_path}")
+
+	else:
+		# This should not happen because argparse validates the choice
+		raise RuntimeError(f"Unknown mode: {args.mode}")
 
 
 if __name__ == "__main__":

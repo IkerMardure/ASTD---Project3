@@ -1,0 +1,8 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,model_path
+ItalyPowerDemand,TSF (ours),0.9620991253644315,0.953300770000169,2.4657264239999677,ok,,trained_models/ItalyPowerDemand/TSF__ours_.joblib
+ItalyPowerDemand,1NN-DTW,0.9504373177842566,0.0012311689997659414,0.5073955859998023,ok,,trained_models/ItalyPowerDemand/1NN-DTW.joblib
+ItalyPowerDemand,BOSS-ensemble,0.9271137026239067,1.5123116510003456,1.2380836120000822,ok,,trained_models/ItalyPowerDemand/BOSS-ensemble.joblib
+ItalyPowerDemand,Shapelet Transform (ST),0.9630709426627794,7.670120317000055,0.8860778879998179,ok,,trained_models/ItalyPowerDemand/Shapelet_Transform__ST_.joblib
+ItalyPowerDemand,Rocket,0.9698736637512148,0.22494438100011394,2.2154336549997424,ok,,trained_models/ItalyPowerDemand/Rocket.joblib
+ItalyPowerDemand,InceptionTime,nan,nan,nan,error,"ModuleNotFoundError: InceptionTimeClassifier requires package 'tensorflow' to be present in the python environment, but 'tensorflow' was not found. 'tensorflow' is a soft dependency and not included in the base aeon installation. Please run: `pip install tensorflow` to install the tensorflow package. To install all soft dependencies, run: `pip install aeon[all_extras]`",
+ItalyPowerDemand,catch22,0.8794946550048591,0.3941069879997485,0.20185284499984846,ok,,trained_models/ItalyPowerDemand/catch22.joblib
