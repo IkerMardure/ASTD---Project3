@@ -62,8 +62,9 @@
   }
   .panel--span {
     grid-column: span 2;
-    justify-self: center;
-    max-width: 980px;
+    justify-self: stretch;
+    max-width: none;
+    width: 100%;
   }
 
   /* panel title + description */
@@ -73,6 +74,26 @@
 
   /* canvas wrapper with fixed height */
   .chart-wrap   { position: relative; height: 260px; }
+
+  /* bubble legend (top chart) */
+  .bubble-legend {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 11px;
+    color: #555;
+    margin-top: 10px;
+  }
+  .bubble-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .bubble-legend-swatch {
+    border-radius: 50%;
+    background: rgba(60, 120, 220, 0.35);
+    border: 1px solid rgba(60, 120, 220, 0.8);
+  }
 
   /* ── manual legend ── */
   .legend {
@@ -117,21 +138,7 @@
 
 <div class="grid">
 
-  <!-- ── PANEL 1: train vs test log-log ── -->
-  <div class="panel panel--span">
-    <div class="panel-header">
-      <div class="panel-title">Train time vs Test time (log–log scale)</div>
-      <div class="panel-desc">
-        X axis = train time · Y axis = test time (both log). Points below the diagonal
-        mean inference is much faster than training.
-        Compact clusters indicate stable behavior across datasets.
-        Right-side outliers indicate expensive ensembles.
-      </div>
-    </div>
-    <div class="chart-wrap"><canvas id="cLogLog"></canvas></div>
-  </div>
-
-  <!-- ── PANEL 2: barplot (mean) ── -->
+  <!-- ── PANEL 1: barplot (mean) ── -->
   <div class="panel">
     <div class="panel-header">
       <div class="panel-title" id="barsTitle">Mean time per technique</div>
@@ -142,8 +149,22 @@
     <div class="chart-wrap"><canvas id="cBars"></canvas></div>
   </div>
 
-  <!-- ── PANEL 3: dataset profile (stacked) ── -->
+  <!-- ── PANEL 2: dataset size vs length ── -->
   <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Dataset size vs series length (bubble = time)</div>
+      <div class="panel-desc">
+        X axis = number of time series in the dataset.
+        Y axis = length of each time series.
+        Bubble size reflects the selected time metric (train/test/total) for each technique.
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="cLogLog"></canvas></div>
+    <div id="bubbleLegend" class="bubble-legend"></div>
+  </div>
+
+  <!-- ── PANEL 3: dataset profile (stacked) ── -->
+  <div class="panel panel--span">
     <div class="panel-header">
       <div class="panel-title" id="profileTitle">Dataset profile (stacked)</div>
       <div class="panel-desc">
@@ -510,35 +531,71 @@ const ALPHA_TRAIN = 0.65;
 const ALPHA_TEST  = 0.35;
 const MIN_BUBBLE_RATIO = 0.35;
 
+
 let charts = {};
 
 function buildLogLog(datasetName, metricMode) {
   charts.loglog?.destroy();
 
-  const rows = DATA.filter(d => d.ds === datasetName);
-  const maxSize = Math.max(...rows.map(d => Math.max(d.trainT, d.testT)));
-  // Sqrt scaling reduces dynamic range, keeping bubbles readable.
-  const scaleSize = v => 4 + 18 * Math.sqrt((v || 0) / (maxSize || 1));
-
+  // Position bubbles by dataset size/length, and size them by time.
   const datasets = [];
+  const datasetMap = new Map();
+  DATA.forEach(d => {
+    const key = `${d.ds}||${d.technique}`;
+    if (!datasetMap.has(key)) datasetMap.set(key, []);
+    datasetMap.get(key).push(d);
+  });
+
+  const maxTime = Math.max(...DATA.map(d => Math.max(d.trainT, d.testT)));
+  const scaleSize = v => 4 + 18 * Math.sqrt((v || 0) / (maxTime || 1));
+
+  const buildBubbleLegend = () => {
+    const legend = document.getElementById('bubbleLegend');
+    const sample = [0.25, 0.5, 1].map(f => ({
+      label: `${Math.round(maxTime * f)}s`,
+      r: scaleSize(maxTime * f),
+    }));
+    legend.innerHTML = sample.map(s =>
+      `<span class="bubble-legend-item">
+         <span class="bubble-legend-swatch" style="width:${s.r * 2}px; height:${s.r * 2}px"></span>
+         ${s.label}
+       </span>`
+    ).join('');
+  };
+
+  const makePoints = (technique, timeFn) => {
+    return DATASETS.map(ds => {
+      const key = `${ds.name}||${technique}`;
+      const recs = datasetMap.get(key) ?? [];
+      const time = recs.length ? mean(recs.map(r => timeFn(r))) : null;
+      const r = scaleSize(time);
+      return {
+        x: ds.nSeries,
+        y: ds.length,
+        r,
+        _d: { ds: ds.name, technique, time, train: recs.length ? mean(recs.map(r => r.trainT)) : null, test: recs.length ? mean(recs.map(r => r.testT)) : null },
+      };
+    });
+  };
+
   if (metricMode === 'total') {
-    const makeDataset = (labelSuffix, alpha, sizeFn) => TECHNIQUES.map((t, ti) => ({
-      label: `${t} ${labelSuffix}`,
-      data: rows.filter(d => d.technique === t).map(d => ({
-        x: d.trainT,
-        y: d.testT,
-        r: scaleSize(sizeFn(d)),
-        _d: d,
-      })),
-      backgroundColor: toRgba(TECH_COLORS[ti], alpha),
-      borderColor: toRgba(TECH_COLORS[ti], Math.min(alpha + 0.4, 1)),
+    const testDatasets = TECHNIQUES.map((t, ti) => ({
+      label: `${t} (test)`,
+      data: makePoints(t, r => r.testT),
+      backgroundColor: toRgba(TECH_COLORS[ti], ALPHA_TEST),
+      borderColor: toRgba(TECH_COLORS[ti], Math.min(ALPHA_TEST + 0.4, 1)),
       borderWidth: 1,
     }));
 
-    const testDatasets = makeDataset('(test)', ALPHA_TEST, d => d.testT);
-    const trainDatasets = makeDataset('(train)', ALPHA_TRAIN, d => d.trainT);
+    const trainDatasets = TECHNIQUES.map((t, ti) => ({
+      label: `${t} (train)`,
+      data: makePoints(t, r => r.trainT),
+      backgroundColor: toRgba(TECH_COLORS[ti], ALPHA_TRAIN),
+      borderColor: toRgba(TECH_COLORS[ti], Math.min(ALPHA_TRAIN + 0.4, 1)),
+      borderWidth: 1,
+    }));
 
-    // Ensure the smaller bubble stays visible even when the other is much larger.
+    // Ensure the smaller bubble remains visible even if the other is much larger.
     for (let ti = 0; ti < testDatasets.length; ti += 1) {
       const testPoints = testDatasets[ti].data;
       const trainPoints = trainDatasets[ti].data;
@@ -552,22 +609,18 @@ function buildLogLog(datasetName, metricMode) {
       }
     }
 
-    // Draw test bubbles first, then train on top for better visibility.
     datasets.push(...testDatasets);
     datasets.push(...trainDatasets);
+    buildBubbleLegend();
   } else {
-    const getSizeValue = d => metricMode === 'test' ? d.testT : d.trainT;
+    const alpha = metricMode === 'test' ? ALPHA_TEST : ALPHA_TRAIN;
+    const suffix = metricMode === 'test' ? '(test)' : '(train)';
 
     datasets.push(...TECHNIQUES.map((t, ti) => ({
-      label: t,
-      data: rows.filter(d => d.technique === t).map(d => ({
-        x: d.trainT,
-        y: d.testT,
-        r: scaleSize(getSizeValue(d)),
-        _d: d,
-      })),
-      backgroundColor: TECH_FILL[ti],
-      borderColor: TECH_COLORS[ti],
+      label: `${t} ${suffix}`,
+      data: makePoints(t, r => (metricMode === 'test' ? r.testT : r.trainT)),
+      backgroundColor: toRgba(TECH_COLORS[ti], alpha),
+      borderColor: toRgba(TECH_COLORS[ti], Math.min(alpha + 0.4, 1)),
       borderWidth: 1,
     })));
   }
@@ -594,13 +647,13 @@ function buildLogLog(datasetName, metricMode) {
       },
       scales: {
         x: {
-          type: 'logarithmic',
-          title: { display: true, text: 'train time (s, log)', font: { size: 11 } },
+          type: 'linear',
+          title: { display: true, text: 'number of time series', font: { size: 11 } },
           ticks: { font: { size: 10 } },
         },
         y: {
-          type: 'logarithmic',
-          title: { display: true, text: 'test time (s, log)', font: { size: 11 } },
+          type: 'linear',
+          title: { display: true, text: 'time series length', font: { size: 11 } },
           ticks: { font: { size: 10 } },
         },
       },
@@ -621,18 +674,21 @@ function buildBars(datasetName, metric) {
       const vals = rows.filter(d => d.techIdx === ti).map(d => d.trainT);
       return mean(vals);
     });
+    // no error bars, std not shown
+    const trainStds = TECHNIQUES.map(() => 0);
 
     const testMeans = TECHNIQUES.map((_, ti) => {
       const vals = rows.filter(d => d.techIdx === ti).map(d => d.testT);
       return mean(vals);
     });
+    const testStds = TECHNIQUES.map(() => 0);
 
     datasets = [
       {
         label: 'train',
         data: trainMeans,
-        backgroundColor: TECH_FILL,
-        borderColor: TECH_COLORS,
+        backgroundColor: TECH_COLORS.map(c => toRgba(c, ALPHA_TRAIN)),
+        borderColor: TECH_COLORS.map(c => toRgba(c, Math.min(ALPHA_TRAIN + 0.4, 1))),
         borderWidth: 1,
         borderRadius: 3,
         stack: 'a',
@@ -640,8 +696,8 @@ function buildBars(datasetName, metric) {
       {
         label: 'test',
         data: testMeans,
-        backgroundColor: TECH_FILL.map(c => c.replace(',0.55)', ',0.35)')),
-        borderColor: TECH_COLORS,
+        backgroundColor: TECH_COLORS.map(c => toRgba(c, ALPHA_TEST)),
+        borderColor: TECH_COLORS.map(c => toRgba(c, Math.min(ALPHA_TEST + 0.4, 1))),
         borderWidth: 1,
         borderRadius: 3,
         stack: 'a',
@@ -654,13 +710,12 @@ function buildBars(datasetName, metric) {
       const vals = rows.filter(d => d.techIdx === ti).map(d => d[field]);
       return mean(vals);
     });
-
     datasets = [
       {
         label: metric,
         data: means,
-        backgroundColor: TECH_FILL,
-        borderColor: TECH_COLORS,
+        backgroundColor: TECH_COLORS.map(c => toRgba(c, metric === 'test' ? ALPHA_TEST : ALPHA_TRAIN)),
+        borderColor: TECH_COLORS.map(c => toRgba(c, Math.min((metric === 'test' ? ALPHA_TEST : ALPHA_TRAIN) + 0.4, 1))),
         borderWidth: 1,
         borderRadius: 3,
       },
@@ -717,8 +772,8 @@ function buildProfile(datasetName, metric) {
   // Ensure the profile chart has enough vertical space as datasets grow.
   // For just a few datasets, keep the chart compact.
   const profileWrap = document.getElementById('cProfile').parentElement;
-  const baseHeight = labels.length <= 2 ? 160 : 220;
-  const targetHeight = Math.max(baseHeight, labels.length * 26 + 50);
+  const baseHeight = labels.length <= 2 ? 180 : 260;
+  const targetHeight = Math.max(baseHeight, labels.length * 40 + 60);
   profileWrap.style.height = `${targetHeight}px`;
 
   const metricLabel = metric === 'test' ? 'test time' : metric === 'total' ? 'train+test time' : 'train time';
@@ -794,6 +849,7 @@ function buildProfile(datasetName, metric) {
           ticks: { font: { size: 9 }, maxRotation: 0, autoSkip: false },
         },
       },
+      datasets: { barThickness: 32, maxBarThickness: 48, barPercentage: 0.92, categoryPercentage: 0.95 },
       layout: { padding: 8 },
     }
   });
