@@ -137,6 +137,15 @@ def main() -> None:
 		action="store_true",
 		help="Exclude TSF (ours) from benchmark runs.",
 	)
+	parser.add_argument(
+		"--load-all",
+		action="store_true",
+		help=(
+			"When training, automatically load existing trained models (if present) "
+			"instead of prompting for each one. "
+			"Missing models will still be trained."
+		),
+	)
 	args = parser.parse_args()
 
 	if args.mode == "synthetic":
@@ -202,6 +211,8 @@ def main() -> None:
 					include_tsf=not args.no_tsf,
 					random_state=args.seed,
 					n_estimators_tsf=args.n_estimators,
+					ask_on_existing_model=not args.load_all,
+					load_existing_if_available=args.load_all,
 					model_dir=args.model_dir,
 				)
 			)

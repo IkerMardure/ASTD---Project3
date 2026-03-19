@@ -1,0 +1,8 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,model_path
+GunPoint,TSF (ours),0.9666666666666667,0.0,4.419921499968041,ok,,
+GunPoint,1NN-DTW,0.9066666666666666,0.0,4.101491699984763,ok,,
+GunPoint,BOSS-ensemble,1.0,0.0,4.5385241999756545,ok,,
+GunPoint,Shapelet Transform (ST),1.0,0.0,2.334628699987661,ok,,
+GunPoint,Rocket,1.0,0.0,13.691777100029867,ok,,
+GunPoint,InceptionTime,0.6,234.57161590002943,5.369895199954044,ok,,trained_models\GunPoint\InceptionTime.joblib
+GunPoint,catch22,0.9466666666666667,0.0,42.843825999996625,ok,,

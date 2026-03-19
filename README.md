@@ -33,6 +33,26 @@ Optional parameters (example):
 python experiments/main_run.py --n-train 100 --n-test 40 --n-timestamps 120 --n-estimators 300 --seed 7
 ```
 
+### Full CLI example (all available arguments)
+
+The following command shows how to invoke `main_run.py` with every supported argument.
+
+```bash
+python experiments/main_run.py \
+  --mode train \
+  --datasets ItalyPowerDemand,GunPoint,ECG5000,InlineSkate,ElectricDevices \
+  --benchmarks "1NN-DTW,BOSS-ensemble,Rocket" \
+  --data-dir data \
+  --output-csv results/benchmark_comparison.csv \
+  --model-dir trained_models \
+  --predictions-dir results/predictions \
+  --n-estimators 300 \
+  --seed 7 \
+  --n-train 100 \
+  --n-test 40 \
+  --n-timestamps 120
+```
+
 > **Note:** When running on multiple datasets, output CSVs are now named per dataset to avoid overwriting. You can also use `{dataset}` in `--output-csv` to explicitly control where each dataset’s results go.
 
 ---
@@ -41,20 +61,23 @@ python experiments/main_run.py --n-train 100 --n-test 40 --n-timestamps 120 --n-
 
 `experiments/main_run.py` supports 4 execution modes: `benchmarks`, `synthetic`, `train`, and `forecast`. Here’s what each mode does and when to use it:
 
-- **`benchmarks`** (default): Trains each classifier from scratch on the UCR train split and evaluates on the UCR test split.
-  - Produces a results CSV (default `results/benchmark_comparison.csv`).
-  - Does **not** keep trained models or per-instance predictions.
+| Mode | What it does | Output |
+|------|--------------|--------|
+| `benchmarks` (default) | Train all classifiers from scratch and evaluate on test split. | `results/benchmark_comparison*.csv` |
+| `train` | Train and save all classifiers to disk. | `trained_models/<dataset>/<classifier>.joblib` + per-dataset CSV |
+| `forecast` / `predict` | Load saved models and run inference on test split. | `results/predictions/<dataset>/<classifier>.csv` |
+| `synthetic` | Run a quick random-data sanity check (no UCR data). | (no files) |
 
-- **`synthetic`**: Runs a very small synthetic experiment (random data) to verify things work.
-  - Useful for quick sanity checks without using UCR data.
+### Common flags (quick reference)
 
-- **`train`**: Trains classifiers on the UCR train split and **saves the trained models** to disk.
-  - Saved models live in `trained_models/<dataset>/<classifier>.joblib`.
-  - Produces per-dataset results CSVs of training metrics.
-
-- **`forecast`**: Loads the saved models and runs inference on the UCR test split.
-  - Requires models to be present under `trained_models/` (i.e., run `--mode train` first).
-  - Saves per-instance predictions to `results/predictions/<dataset>/<classifier>.csv`.
+| Flag | Applies to | What it does | Example |
+|------|------------|-------------|---------|
+| `--datasets` | all modes | Select dataset(s) under `data/` | `--datasets ItalyPowerDemand,GunPoint` |
+| `--benchmarks` | `benchmarks`, `train`, `forecast` | Limit which benchmark classifiers run | `--benchmarks Rocket,BOSS-ensemble` |
+| `--load-all` | `train` | Load existing models automatically (no prompt) | `--mode train --load-all` |
+| `--no-tsf` | `benchmarks`, `train`, `forecast` | Skip the TSF (ours) classifier | `--no-tsf` |
+| `--model-dir` | `train`, `forecast` | Custom location for saving/loading models | `--model-dir my_models` |
+| `--predictions-dir` | `forecast` | Custom location for predictions output | `--predictions-dir my_preds` |
 
 ### Example workflows
 

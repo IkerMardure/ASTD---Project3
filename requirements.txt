@@ -1,4 +1,5 @@
 aeon>=0.11.0
 numpy>=1.24
 matplotlib>=3.0
+protobuf>=3.20.2,<6
 tensorflow-cpu>=2.16

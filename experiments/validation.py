@@ -41,6 +41,38 @@ def _ensure_dir(path: Path) -> None:
 	path.mkdir(parents=True, exist_ok=True)
 
 
+def _prompt_load_or_retrain(model_path: Path, allow_load_all: bool = True) -> str:
+	"""Ask the user whether to load an existing model or retrain (without saving).
+
+	Returns:
+	- "load": load this existing model
+	- "retrain": retrain without saving/overwriting
+	- "load_all": load this and all subsequent existing models without prompting
+	"""
+	prompt = (
+		f"\nModel already exists at: {model_path}\n"
+		"  [L]oad existing model (recommended)\n"
+		"  [R]etrain (do not overwrite/save)\n"
+	)
+	if allow_load_all:
+		prompt += "  [A]ll (load this and all remaining existing models)\n"
+	prompt += "Choose [L/r" + ("/a" if allow_load_all else "") + "]: "
+
+	while True:
+		try:
+			choice = input(prompt).strip().lower()
+		except (EOFError, KeyboardInterrupt):
+			# Non-interactive environment (e.g. CI), default to loading existing model.
+			return "load"
+		if choice == "" or choice.startswith("l"):
+			return "load"
+		if allow_load_all and choice.startswith("a"):
+			return "load_all"
+		if choice.startswith("r"):
+			return "retrain"
+		print("Please enter 'l' to load, 'r' to retrain" + (" or 'a' to load all" if allow_load_all else "") + ".")
+
+
 def _model_path(model_dir: Path, dataset_name: str, classifier_name: str) -> Path:
 	"""Return a full path where a trained model should be saved/loaded."""
 	return Path(model_dir) / dataset_name / f"{_sanitize_filename(classifier_name)}.joblib"
@@ -232,10 +264,7 @@ def run_benchmark_suite(
 	If a model cannot be instantiated or trained due to missing optional
 	dependencies, the error is captured and included in the results.
 	"""
-	n_classifiers = len(DEFAULT_BENCHMARK_SPECS if benchmark_names is None else [
-		s for s in DEFAULT_BENCHMARK_SPECS if s.name.lower() in {n.strip().lower() for n in benchmark_names}
-	]) + (1 if include_tsf else 0)
-	print(f"\n=== Dataset: {dataset_name} ({n_classifiers} classifiers) ===", flush=True)
+	print(f"\n=== Dataset: {dataset_name} ({len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers) ===", flush=True)
 	print(f"  Loading data...", flush=True)
 	X_train, y_train, X_test, y_test = load_ucr_dataset(data_dir=data_dir, dataset_name=dataset_name)
 	print(f"  Loaded: train={X_train.shape}, test={X_test.shape}", flush=True)
@@ -249,7 +278,7 @@ def run_benchmark_suite(
 
 	if include_tsf:
 		try:
-			tsf = AeonTSFClassifier(
+			tsfc = AeonTSFClassifier(
 				config=TSFConfig(
 					n_estimators=n_estimators_tsf,
 					random_state=random_state,
@@ -257,7 +286,7 @@ def run_benchmark_suite(
 			)
 			rows.append(
 				_evaluate_model(
-					model=tsf,
+					model=tsfc,
 					model_name="TSF (ours)",
 					dataset_name=dataset_name,
 					X_train=X_train,
@@ -319,9 +348,22 @@ def run_train_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	ask_on_existing_model: bool = False,
+	load_existing_if_available: bool = False,
 	model_dir: str | Path = "trained_models",
 ) -> list[dict[str, Any]]:
-	"""Train classifiers on a dataset and persist the trained models."""
+	"""Train classifiers on a dataset and persist the trained models.
+
+	If `ask_on_existing_model` is True and a model file already exists, the user is
+	prompted to either load the existing model (and evaluate it) or retrain without
+	saving/overwriting the existing file.
+
+	If `load_existing_if_available` is True, existing models are loaded automatically
+	(without prompting), and only missing models are trained.
+	"""
+
+	load_all_mode = load_existing_if_available
+
 	print(f"\n=== Dataset: {dataset_name} (train + save) ===", flush=True)
 	print(f"  Loading data...", flush=True)
 	X_train, y_train, X_test, y_test = load_ucr_dataset(data_dir=data_dir, dataset_name=dataset_name)
@@ -335,67 +377,263 @@ def run_train_suite(
 	rows: list[dict[str, Any]] = []
 
 	if include_tsf:
-		try:
-			tsfc = AeonTSFClassifier(
-				config=TSFConfig(
-					n_estimators=n_estimators_tsf,
-					random_state=random_state,
-				)
-			)
-			rows.append(
-				_evaluate_model(
-					model=tsfc,
-					model_name="TSF (ours)",
-					dataset_name=dataset_name,
-					X_train=X_train,
-					y_train=y_train,
-					X_test=X_test,
-					y_test=y_test,
-					model_path=_model_path(Path(model_dir), dataset_name, "TSF (ours)"),
-				)
-			)
-		except Exception as exc:
-			print(f"  [{dataset_name}] TSF (ours) — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": "TSF (ours)",
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+		model_name = "TSF (ours)"
+		model_path = _model_path(Path(model_dir), dataset_name, model_name)
+		handled = False
 
-	for spec in selected_specs:
-		try:
-			model = instantiate_benchmark(spec=spec, random_state=random_state)
-			rows.append(
-				_evaluate_model(
-					model=model,
-					model_name=spec.name,
-					dataset_name=dataset_name,
-					X_train=X_train,
-					y_train=y_train,
-					X_test=X_test,
-					y_test=y_test,
-					model_path=_model_path(Path(model_dir), dataset_name, spec.name),
+		if model_path.exists() and load_all_mode:
+			try:
+				model = load_model(model_path)
+				rows.append(
+					_evaluate_loaded_model(
+						model=model,
+						model_name=model_name,
+						dataset_name=dataset_name,
+						X_test=X_test,
+						y_test=y_test,
+					)
 				)
-			)
-		except Exception as exc:
-			print(f"  [{dataset_name}] {spec.name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": spec.name,
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+			except Exception as exc:
+				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+				rows.append(
+					{
+						"dataset": dataset_name,
+						"classifier": model_name,
+						"accuracy": np.nan,
+						"fit_time_s": np.nan,
+						"predict_time_s": np.nan,
+						"status": "error",
+						"error": f"{type(exc).__name__}: {exc}",
+					}
+				)
+			handled = True
+
+		elif model_path.exists() and ask_on_existing_model:
+			action = _prompt_load_or_retrain(model_path)
+			if action == "load_all":
+				load_all_mode = True
+				action = "load"
+
+			if action == "load":
+				try:
+					model = load_model(model_path)
+					rows.append(
+						_evaluate_loaded_model(
+							model=model,
+							model_name=model_name,
+							dataset_name=dataset_name,
+							X_test=X_test,
+							y_test=y_test,
+						)
+					)
+				except Exception as exc:
+					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+					rows.append(
+						{
+							"dataset": dataset_name,
+							"classifier": model_name,
+							"accuracy": np.nan,
+							"fit_time_s": np.nan,
+							"predict_time_s": np.nan,
+							"status": "error",
+							"error": f"{type(exc).__name__}: {exc}",
+						}
+					)
+				handled = True
+			elif action == "retrain":
+				try:
+					tsfc = AeonTSFClassifier(
+						config=TSFConfig(
+							n_estimators=n_estimators_tsf,
+							random_state=random_state,
+						)
+					)
+					rows.append(
+						_evaluate_model(
+							model=tsfc,
+							model_name=model_name,
+							dataset_name=dataset_name,
+							X_train=X_train,
+							y_train=y_train,
+							X_test=X_test,
+							y_test=y_test,
+							# Do not overwrite the existing trained model.
+							model_path=None,
+						)
+					)
+				except Exception as exc:
+					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+					rows.append(
+						{
+							"dataset": dataset_name,
+							"classifier": model_name,
+							"accuracy": np.nan,
+							"fit_time_s": np.nan,
+							"predict_time_s": np.nan,
+							"status": "error",
+							"error": f"{type(exc).__name__}: {exc}",
+						}
+					)
+				handled = True
+
+		if not handled:
+			try:
+				tsfc = AeonTSFClassifier(
+					config=TSFConfig(
+						n_estimators=n_estimators_tsf,
+						random_state=random_state,
+					)
+				)
+				rows.append(
+					_evaluate_model(
+						model=tsfc,
+						model_name=model_name,
+						dataset_name=dataset_name,
+						X_train=X_train,
+						y_train=y_train,
+						X_test=X_test,
+						y_test=y_test,
+						model_path=model_path,
+					)
+				)
+			except Exception as exc:
+				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+				rows.append(
+					{
+						"dataset": dataset_name,
+						"classifier": model_name,
+						"accuracy": np.nan,
+						"fit_time_s": np.nan,
+						"predict_time_s": np.nan,
+						"status": "error",
+						"error": f"{type(exc).__name__}: {exc}",
+					}
+				)
+
+	# === Benchmark classifiers ===
+	for spec in selected_specs:
+		model_name = spec.name
+		model_path = _model_path(Path(model_dir), dataset_name, model_name)
+		handled = False
+
+		if model_path.exists() and load_all_mode:
+			try:
+				model = load_model(model_path)
+				rows.append(
+					_evaluate_loaded_model(
+						model=model,
+						model_name=model_name,
+						dataset_name=dataset_name,
+						X_test=X_test,
+						y_test=y_test,
+					)
+				)
+			except Exception as exc:
+				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+				rows.append(
+					{
+						"dataset": dataset_name,
+						"classifier": model_name,
+						"accuracy": np.nan,
+						"fit_time_s": np.nan,
+						"predict_time_s": np.nan,
+						"status": "error",
+						"error": f"{type(exc).__name__}: {exc}",
+					}
+				)
+			handled = True
+
+		elif model_path.exists() and ask_on_existing_model:
+			action = _prompt_load_or_retrain(model_path)
+			if action == "load_all":
+				load_all_mode = True
+				action = "load"
+
+			if action == "load":
+				try:
+					model = load_model(model_path)
+					rows.append(
+						_evaluate_loaded_model(
+							model=model,
+							model_name=model_name,
+							dataset_name=dataset_name,
+							X_test=X_test,
+							y_test=y_test,
+						)
+					)
+				except Exception as exc:
+					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+					rows.append(
+						{
+							"dataset": dataset_name,
+							"classifier": model_name,
+							"accuracy": np.nan,
+							"fit_time_s": np.nan,
+							"predict_time_s": np.nan,
+							"status": "error",
+							"error": f"{type(exc).__name__}: {exc}",
+						}
+					)
+				handled = True
+			elif action == "retrain":
+				try:
+					model = instantiate_benchmark(spec=spec, random_state=random_state)
+					rows.append(
+						_evaluate_model(
+							model=model,
+							model_name=model_name,
+							dataset_name=dataset_name,
+							X_train=X_train,
+							y_train=y_train,
+							X_test=X_test,
+							y_test=y_test,
+							# Do not overwrite the existing trained model.
+							model_path=None,
+						)
+					)
+				except Exception as exc:
+					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+					rows.append(
+						{
+							"dataset": dataset_name,
+							"classifier": model_name,
+							"accuracy": np.nan,
+							"fit_time_s": np.nan,
+							"predict_time_s": np.nan,
+							"status": "error",
+							"error": f"{type(exc).__name__}: {exc}",
+						}
+					)
+				handled = True
+
+		if not handled:
+			try:
+				model = instantiate_benchmark(spec=spec, random_state=random_state)
+				rows.append(
+					_evaluate_model(
+						model=model,
+						model_name=model_name,
+						dataset_name=dataset_name,
+						X_train=X_train,
+						y_train=y_train,
+						X_test=X_test,
+						y_test=y_test,
+						model_path=model_path,
+					)
+				)
+			except Exception as exc:
+				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
+				rows.append(
+					{
+						"dataset": dataset_name,
+						"classifier": model_name,
+						"accuracy": np.nan,
+						"fit_time_s": np.nan,
+						"predict_time_s": np.nan,
+						"status": "error",
+						"error": f"{type(exc).__name__}: {exc}",
+					}
+				)
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
@@ -486,6 +724,7 @@ def run_predict_suite(
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
+
 
 # Backwards compatibility: old name
 run_forecast_suite = run_predict_suite
