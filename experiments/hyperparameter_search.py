@@ -15,14 +15,11 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedKFold
 
-# Make project root importable when running this file directly:
-# python experiments/hyperparameter_search.py
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from classifiers.tsf import AeonTSFClassifier, TSFConfig  # noqa: E402
-
+from classifiers.tsf_classifier import AeonTSFClassifier, TSFConfig
 
 # Optional dependency: Optuna
 try:
@@ -79,6 +76,11 @@ def cross_validate_params(
 ) -> dict[str, Any]:
     """
     Evaluate one hyperparameter configuration using Stratified K-Fold CV.
+
+    ---
+    For these hyperparameters, train and test the model multiple times 
+    on different splits, then average the results to see how good they really are
+    ---
     """
     X_arr = np.asarray(X)
     y_arr = np.asarray(y)
@@ -119,10 +121,11 @@ def default_grid_space() -> dict[str, list[Any]]:
     Discrete search space for grid/random search.
     """
     return {
-        "n_estimators": [50, 100, 200, 300, 500],
-        "min_interval_length": [3, 5, 7, 10, 15],
-        "n_jobs": [-1],
-        "random_state": [42],
+        #these are the actual hyperparameters that we are tuning in our TSF model:
+        "n_estimators": [50, 100, 200, 300, 500], #number of trees in the forest
+        "min_interval_length": [3, 5, 7, 10, 15], #minimum size of time intervals extracted from the series
+        "n_jobs": [-1], #This controls how many CPU cores the model uses --> n_jobs = -1: use all available cores
+        "random_state": [42], #if you run the code twice, you should get the same splits and very similar same outcomes
     }
 
 
@@ -188,7 +191,7 @@ def grid_search(
                 f"+/- {result['std_score']:.4f}"
             )
 
-    assert best_result is not None
+    assert best_result is not None #Make sure best_result is not None
 
     return {
         "method": "grid_search",
@@ -235,6 +238,7 @@ def random_search(
     best_result: dict[str, Any] | None = None
     seen: set[tuple[tuple[str, Any], ...]] = set()
 
+    #Total number of unique hyperparameter combinations possible
     max_unique = math.prod(len(v) for v in param_distributions.values())
     n_iter_effective = min(n_iter, max_unique)
 
@@ -245,7 +249,7 @@ def random_search(
         )
 
     attempts = 0
-    while len(all_results) < n_iter_effective and attempts < n_iter_effective * 10:
+    while len(all_results) < n_iter_effective and attempts < n_iter_effective * 10: #*10 = “try a bit harder to find unique configs, but don’t get stuck forever”
         attempts += 1
         params = sample_random_params(param_distributions, rng)
         key = tuple(sorted(params.items()))
@@ -310,9 +314,11 @@ def optuna_search(
     y_arr = np.asarray(y)
     trial_results: list[dict[str, Any]] = []
 
+    #1. Define the objective
     def objective(trial: "optuna.trial.Trial") -> float:
+        #2. It samples hyperparameters
         params = default_optuna_space(trial)
-
+        #3. It evaluates them
         result = cross_validate_params(
             X=X_arr,
             y=y_arr,
@@ -322,9 +328,11 @@ def optuna_search(
             random_state=random_state,
         )
 
+        #store extra evaluation details (std, folds) inside each Optuna trial
         trial.set_user_attr("std_score", result["std_score"])
         trial.set_user_attr("fold_scores", result["fold_scores"])
 
+        #save all trial results in your own list for later use (analysis, plots, JSON)
         trial_results.append(result)
 
         if verbose:
@@ -333,16 +341,18 @@ def optuna_search(
                 f"mean_{metric}={result['mean_score']:.4f} "
                 f"+/- {result['std_score']:.4f}"
             )
-
+        #4. It returns a score
         return result["mean_score"]
 
+    #Defines the smart strategy Optuna uses to choose better hyperparameters
     sampler = optuna.samplers.TPESampler(seed=random_state)
+    #Creates the optimization experiment that runs and tracks all trials (maximizing performance)
     study = optuna.create_study(
         direction="maximize",
         study_name=study_name,
         sampler=sampler,
     )
-
+    #5. Optuna loop
     study.optimize(objective, n_trials=n_trials)
 
     best_trial = study.best_trial
@@ -471,17 +481,20 @@ def run_hyperparameter_search(
 
 # Example usage with real datasets (UCR/UEA format)
 if __name__ == "__main__":
-    from aeon.datasets import load_from_tsfile
+    from aeon.datasets import load_from_ts_file
+    #datasets = [
+     #   "ECG5000",
+      #  "ElectricDevices",
+       # "GunPoint",
+        #"InlineSkate",
+        #"ItalyPowerDemand",
+    #]
 
-    datasets = [
-        "ECG5000",
-        "ElectricDevices",
-        "GunPoint",
-        "InlineSkate",
-        "ItalyPowerDemand",
-    ]
+    datasets = ["GunPoint"]
 
-    methods = ["optuna", "grid", "random"]
+    #methods = ["optuna", "grid", "random"]
+
+    methods = ["optuna"]
 
     for dataset_name in datasets:
         print(f"\n{'#' * 70}")
@@ -492,8 +505,8 @@ if __name__ == "__main__":
         train_path = PROJECT_ROOT / "data" / dataset_name / f"{dataset_name}_TRAIN.ts"
         test_path = PROJECT_ROOT / "data" / dataset_name / f"{dataset_name}_TEST.ts"
 
-        X_train, y_train = load_from_tsfile(train_path)
-        X_test, y_test = load_from_tsfile(test_path)
+        X_train, y_train = load_from_ts_file(train_path)
+        X_test, y_test = load_from_ts_file(test_path)
 
         # Convert to numpy (your classifier expects numpy)
         X = np.concatenate([X_train, X_test], axis=0)
@@ -511,11 +524,11 @@ if __name__ == "__main__":
                 X=X,
                 y=y,
                 method=method,
-                cv=5,
+                cv=3, #5,
                 metric="accuracy",
                 random_state=42,
-                n_trials=20,   # optuna
-                n_iter=15,     # random
+                n_trials=3, #20,   # optuna
+                n_iter=3, #15,     # random
                 verbose=True,
             )
 
