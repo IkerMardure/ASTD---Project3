@@ -1,0 +1,92 @@
+{
+    "method": "optuna_search",
+    "metric": "accuracy",
+    "cv": 3,
+    "n_trials": 5,
+    "best_params": {
+        "n_estimators": 100,
+        "min_interval_length": 5,
+        "n_jobs": -1,
+        "random_state": 42
+    },
+    "best_score": 0.9680539960575891,
+    "best_std": 0.009337257604139141,
+    "all_results": [
+        {
+            "params": {
+                "n_estimators": 200,
+                "min_interval_length": 20,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9260897771789306,
+            "std_score": 0.009786145733702612,
+            "fold_scores": [
+                0.9316939890710383,
+                0.9342465753424658,
+                0.9123287671232877
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 400,
+                "min_interval_length": 13,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9625820295930335,
+            "std_score": 0.007225734788811769,
+            "fold_scores": [
+                0.9726775956284153,
+                0.958904109589041,
+                0.9561643835616438
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 100,
+                "min_interval_length": 5,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9680539960575891,
+            "std_score": 0.009337257604139141,
+            "fold_scores": [
+                0.9808743169398907,
+                0.9643835616438357,
+                0.958904109589041
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 50,
+                "min_interval_length": 18,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9543628515108417,
+            "std_score": 0.013142259769520787,
+            "fold_scores": [
+                0.9726775956284153,
+                0.947945205479452,
+                0.9424657534246575
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 350,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9644035232178055,
+            "std_score": 0.00977880052114006,
+            "fold_scores": [
+                0.9781420765027322,
+                0.958904109589041,
+                0.9561643835616438
+            ]
+        }
+    ],
+    "elapsed_seconds": 69.79512667655945
+}

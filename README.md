@@ -184,3 +184,44 @@ Generated images are saved to `visualization/` by default (or `--out-dir`).
 
 - `AeonTSFClassifier` expects time series inputs as NumPy arrays. It accepts 2D arrays (univariate) or 3D arrays (multivariate).
 - If `aeon` is not installed, importing `AeonTSFClassifier` raises an informative `ImportError`.
+
+---
+
+## 📊 Dashboard (new Dash version)
+
+The project now includes a new interactive dashboard implemented in `utils/dashboard/generate_dashboard.py`.
+
+### Run dashboard locally
+
+1) Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2) Run:
+
+```bash
+python utils/dashboard/generate_dashboard.py \
+  --results results/benchmark_comparison.csv \
+  --data-dir data \
+  --hp-dir results \
+  --host 127.0.0.1 --port 8050 --debug
+```
+
+3) Open browser:
+
+`http://127.0.0.1:8050`
+
+### What the dashboard shows
+
+- **Metrics tab**: classifier accuracy bar + line trend for the selected dataset.
+- **Timing tab**: train/predict/total times, one-point bubble across all datasets, stacked horizontal bars, dataset profile.
+- **Hyperparameter tab**: hyperparameter optimization table, scatter (accuracy vs elapsed), with best points emphasized.
+
+### Cleanup
+
+- `utils/dashboard/generate_dashboard_old.py` removed.
+- legacy static `visualization/*.html` files removed.
+
+> Authors: Ane Miren Arregi, Iker Bereziartua, Eneko Zabaleta (ASTD Project 3)
