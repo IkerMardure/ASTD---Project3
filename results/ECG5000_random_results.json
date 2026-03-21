@@ -1,0 +1,357 @@
+{
+    "method": "random_search",
+    "metric": "accuracy",
+    "cv": 5,
+    "n_iter": 20,
+    "best_params": {
+        "n_estimators": 50,
+        "min_interval_length": 3,
+        "n_jobs": -1,
+        "random_state": 42
+    },
+    "best_score": 0.9551999999999999,
+    "best_std": 0.005381449618829489,
+    "all_results": [
+        {
+            "params": {
+                "n_estimators": 50,
+                "min_interval_length": 3,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9551999999999999,
+            "std_score": 0.005381449618829489,
+            "fold_scores": [
+                0.957,
+                0.951,
+                0.952,
+                0.951,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 100,
+                "min_interval_length": 5,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9537999999999999,
+            "std_score": 0.005418486873657632,
+            "fold_scores": [
+                0.956,
+                0.953,
+                0.949,
+                0.948,
+                0.963
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 500,
+                "min_interval_length": 10,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9541999999999999,
+            "std_score": 0.006112282715974456,
+            "fold_scores": [
+                0.956,
+                0.952,
+                0.947,
+                0.951,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 50,
+                "min_interval_length": 5,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.954,
+            "std_score": 0.00669328021227261,
+            "fold_scores": [
+                0.956,
+                0.952,
+                0.948,
+                0.948,
+                0.966
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 500,
+                "min_interval_length": 5,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9541999999999999,
+            "std_score": 0.0059126981996377986,
+            "fold_scores": [
+                0.955,
+                0.953,
+                0.948,
+                0.95,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 300,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9538,
+            "std_score": 0.005268775948927801,
+            "fold_scores": [
+                0.953,
+                0.952,
+                0.951,
+                0.949,
+                0.964
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 100,
+                "min_interval_length": 10,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9545999999999999,
+            "std_score": 0.005642694391866359,
+            "fold_scores": [
+                0.956,
+                0.95,
+                0.95,
+                0.952,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 50,
+                "min_interval_length": 10,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9549999999999998,
+            "std_score": 0.006099180272790768,
+            "fold_scores": [
+                0.957,
+                0.949,
+                0.951,
+                0.952,
+                0.966
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 200,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9536,
+            "std_score": 0.005314132102234573,
+            "fold_scores": [
+                0.952,
+                0.951,
+                0.952,
+                0.949,
+                0.964
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 50,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9533999999999999,
+            "std_score": 0.004454211490264022,
+            "fold_scores": [
+                0.953,
+                0.952,
+                0.95,
+                0.95,
+                0.962
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 100,
+                "min_interval_length": 7,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9544,
+            "std_score": 0.00546260011349907,
+            "fold_scores": [
+                0.954,
+                0.952,
+                0.95,
+                0.951,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 200,
+                "min_interval_length": 5,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9541999999999999,
+            "std_score": 0.0057061370470748475,
+            "fold_scores": [
+                0.957,
+                0.951,
+                0.948,
+                0.951,
+                0.964
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 300,
+                "min_interval_length": 7,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9544,
+            "std_score": 0.006151422599691885,
+            "fold_scores": [
+                0.955,
+                0.952,
+                0.949,
+                0.95,
+                0.966
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 500,
+                "min_interval_length": 7,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9544,
+            "std_score": 0.0057827329179203895,
+            "fold_scores": [
+                0.955,
+                0.953,
+                0.948,
+                0.951,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 300,
+                "min_interval_length": 10,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9545999999999999,
+            "std_score": 0.005953150426454892,
+            "fold_scores": [
+                0.956,
+                0.953,
+                0.947,
+                0.952,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 100,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9533999999999999,
+            "std_score": 0.0053888774341229965,
+            "fold_scores": [
+                0.952,
+                0.951,
+                0.951,
+                0.949,
+                0.964
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9545999999999999,
+            "std_score": 0.004673328578219173,
+            "fold_scores": [
+                0.956,
+                0.953,
+                0.95,
+                0.951,
+                0.963
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 200,
+                "min_interval_length": 3,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9551999999999999,
+            "std_score": 0.005775811631277466,
+            "fold_scores": [
+                0.956,
+                0.953,
+                0.95,
+                0.951,
+                0.966
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 500,
+                "min_interval_length": 15,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9533999999999999,
+            "std_score": 0.006280127387243038,
+            "fold_scores": [
+                0.955,
+                0.95,
+                0.949,
+                0.948,
+                0.965
+            ]
+        },
+        {
+            "params": {
+                "n_estimators": 300,
+                "min_interval_length": 3,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "mean_score": 0.9548,
+            "std_score": 0.005153639490690055,
+            "fold_scores": [
+                0.957,
+                0.951,
+                0.951,
+                0.951,
+                0.964
+            ]
+        }
+    ],
+    "elapsed_seconds": 13038.36112689972
+}
