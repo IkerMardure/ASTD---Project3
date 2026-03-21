@@ -161,6 +161,7 @@ def generate_dataset_graph(
 	X: np.ndarray,
 	dataset_name: str,
 	labels: Optional[Sequence[Any]] = None,
+	include_labels: Optional[Sequence[Any]] = None,
 	max_series: int = 16,
 	save: bool = True,
 	out_dir: Union[str, Path] = "visualization",
@@ -179,6 +180,9 @@ def generate_dataset_graph(
 		Name used for titles and output filename.
 	labels:
 		Optional array of labels with length n_samples.
+	include_labels:
+		Optional subset of labels to include. If provided, only samples whose
+		labels are in this list are plotted.
 	max_series:
 		Maximum number of series to plot (will take the first `max_series`).
 	save:
@@ -200,6 +204,17 @@ def generate_dataset_graph(
 	X = np.asarray(X)
 	if X.ndim != 2:
 		raise ValueError("X must be a 2D array of shape (n_samples, n_timestamps)")
+
+	labels_arr = np.asarray(labels) if labels is not None else None
+	if include_labels is not None:
+		if labels_arr is None:
+			raise ValueError("include_labels requires labels to be provided")
+		include_set = set(include_labels)
+		mask = np.array([lab in include_set for lab in labels_arr], dtype=bool)
+		X = X[mask]
+		labels_arr = labels_arr[mask]
+		if X.shape[0] == 0:
+			raise ValueError(f"No series matched include_labels={include_labels}")
 
 	n_samples = min(X.shape[0], max_series)
 	rows, cols = grid_shape
@@ -228,9 +243,9 @@ def generate_dataset_graph(
 			ax.plot(x, series, color="#0072B2", linewidth=1.25)
 
 			title = f"#{i}"
-			if labels is not None:
+			if labels_arr is not None:
 				try:
-					label = labels[i]
+					label = labels_arr[i]
 					title += f" (label={label})"
 				except Exception:
 					# If labels has a different length or is not indexable, ignore.
@@ -255,15 +270,42 @@ def generate_dataset_graph(
 	style = _get_preferred_style()
 	with plt.style.context(style):
 		fig2, ax2 = plt.subplots(figsize=(12, 5))
+		if labels_arr is not None:
+			unique_labels = list(dict.fromkeys(labels_arr[:n_plots]))
+			palette = plt.rcParams.get("axes.prop_cycle").by_key().get(
+				"color", ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#F0E442"]
+			)
+			label_to_color = {
+				label: palette[idx % len(palette)] for idx, label in enumerate(unique_labels)
+			}
+
+			# Keep class '1' always blue, even when filtering to only that label.
+			for label in unique_labels:
+				label_str = str(label).strip()
+				if label_str in {"1", "1.0"}:
+					label_to_color[label] = "#0072B2"
+		else:
+			label_to_color = {}
+
 		for i in range(n_plots):
 			series = X[i]
 			x = np.arange(series.shape[0])
-			ax2.plot(x, series, color="#0072B2", alpha=0.35, linewidth=1.0)
+			line_color = "#0072B2"
+			if labels_arr is not None:
+				line_color = label_to_color.get(labels_arr[i], line_color)
+			ax2.plot(x, series, color=line_color, alpha=0.35, linewidth=1.0)
 		ax2.set_title(f"{dataset_name} (overlay of first {n_plots} series)", fontsize=13, fontweight="bold")
 		ax2.set_xlabel("Time index", fontsize=11)
 		ax2.set_ylabel("Value", fontsize=11)
 		ax2.grid(True, alpha=0.25)
 		ax2.margins(x=0)
+		if labels_arr is not None and len(label_to_color) > 0:
+			from matplotlib.lines import Line2D
+			handles = [
+				Line2D([0], [0], color=col, lw=2, label=str(lab))
+				for lab, col in label_to_color.items()
+			]
+			ax2.legend(handles=handles, title="Label", loc="upper left", framealpha=0.75)
 		fig2.tight_layout()
 
 		if save:

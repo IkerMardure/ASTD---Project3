@@ -12,7 +12,7 @@ from typing import Any
 
 from classifiers.benchmarks.boss_ensemble import SPEC as BOSS_ENSEMBLE_SPEC
 from classifiers.benchmarks.catch22 import SPEC as CATCH22_SPEC
-from classifiers.benchmarks.inception_time import SPEC as INCEPTION_TIME_SPEC
+from classifiers.benchmarks.one_nn_ed import SPEC as ONE_NN_ED_SPEC
 from classifiers.benchmarks.one_nn_dtw import SPEC as ONE_NN_DTW_SPEC
 from classifiers.benchmarks.rocket import SPEC as ROCKET_SPEC
 from classifiers.benchmarks.shapelet_transform import SPEC as SHAPELET_TRANSFORM_SPEC
@@ -21,10 +21,10 @@ from classifiers.benchmarks.spec import BenchmarkSpec
 
 DEFAULT_BENCHMARK_SPECS: tuple[BenchmarkSpec, ...] = (
     ONE_NN_DTW_SPEC,
+    ONE_NN_ED_SPEC,
     BOSS_ENSEMBLE_SPEC,
     SHAPELET_TRANSFORM_SPEC,
     ROCKET_SPEC,
-    INCEPTION_TIME_SPEC,
     CATCH22_SPEC,
 )
 

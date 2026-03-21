@@ -6,8 +6,10 @@ Full dynamic migration, no static HTML pages.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import pandas as pd
@@ -16,16 +18,64 @@ from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 import plotly.graph_objs as go
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from utils.visualize_TS import generate_dataset_graph, load_ucr_txt_dataset
+    from utils.visualize_predictions import (
+        load_predictions_csv,
+        plot_confusion_matrix,
+        plot_overlay_by_correctness,
+    )
+except ModuleNotFoundError:
+    # Fallback for environments where a third-party 'utils' package shadows
+    # the local project folder.
+    local_utils_dir = PROJECT_ROOT / "utils"
+    if str(local_utils_dir) not in sys.path:
+        sys.path.insert(0, str(local_utils_dir))
+
+    from visualize_TS import generate_dataset_graph, load_ucr_txt_dataset
+    from visualize_predictions import (
+        load_predictions_csv,
+        plot_confusion_matrix,
+        plot_overlay_by_correctness,
+    )
+
 
 def _load_ucr_stats(data_dir: Path, dataset_name: str) -> dict[str, int]:
     train_path = data_dir / dataset_name / f"{dataset_name}_TRAIN.txt"
-    if not train_path.exists():
-        return {"nSeries": None, "length": None}
+    test_path = data_dir / dataset_name / f"{dataset_name}_TEST.txt"
 
-    arr = pd.read_csv(train_path, sep=r"\s+", header=None).values
-    if arr.ndim == 1:
-        arr = arr.reshape(1, -1)
-    return {"nSeries": int(arr.shape[0]), "length": int(arr.shape[1] - 1)}
+    n_train = 0
+    n_test = 0
+    length = None
+
+    if train_path.exists():
+        train_arr = pd.read_csv(train_path, sep=r"\s+", header=None).values
+        if train_arr.ndim == 1:
+            train_arr = train_arr.reshape(1, -1)
+        n_train = int(train_arr.shape[0])
+        length = int(train_arr.shape[1] - 1)
+
+    if test_path.exists():
+        test_arr = pd.read_csv(test_path, sep=r"\s+", header=None).values
+        if test_arr.ndim == 1:
+            test_arr = test_arr.reshape(1, -1)
+        n_test = int(test_arr.shape[0])
+        if length is None:
+            length = int(test_arr.shape[1] - 1)
+
+    if length is None:
+        return {"nTrain": None, "nTest": None, "nSeries": None, "length": None}
+
+    return {
+        "nTrain": n_train,
+        "nTest": n_test,
+        "nSeries": n_train + n_test,
+        "length": length,
+    }
 
 
 def collect_results(results_csv: Path, data_dir: Path) -> dict[str, Any]:
@@ -107,8 +157,19 @@ def build_metrics_figures(payload: dict[str, Any], dataset: str):
         return go.Figure(), go.Figure(), {"best": "-", "worst": "-", "mean": "-"}
 
     accuracies = {cls: data["accuracy"] * 100 for cls, data in dataset_metrics.items()}
+    best_cls = max(accuracies, key=lambda x: accuracies[x])
+    worst_cls = min(accuracies, key=lambda x: accuracies[x])
 
-    bar_fig = go.Figure(go.Bar(x=list(accuracies.keys()), y=list(accuracies.values()), marker_color="royalblue"))
+    bar_colors = []
+    for cls in accuracies.keys():
+        if cls == best_cls:
+            bar_colors.append("#2E8B57")
+        elif cls == worst_cls:
+            bar_colors.append("#C0392B")
+        else:
+            bar_colors.append("#4C78A8")
+
+    bar_fig = go.Figure(go.Bar(x=list(accuracies.keys()), y=list(accuracies.values()), marker_color=bar_colors))
     bar_fig.update_layout(title=f"Accuracy for {dataset}", xaxis_title="Classifier", yaxis_title="Accuracy (%)", yaxis=dict(range=[0, 100]))
 
     datasets_list = [d["name"] for d in payload["datasets"]]
@@ -120,8 +181,6 @@ def build_metrics_figures(payload: dict[str, Any], dataset: str):
     line_fig = go.Figure(line_series)
     line_fig.update_layout(title="Accuracy across datasets", xaxis_title="Dataset", yaxis_title="Accuracy (%)", yaxis=dict(range=[0, 100]))
 
-    best_cls = max(accuracies, key=lambda x: accuracies[x])
-    worst_cls = min(accuracies, key=lambda x: accuracies[x])
     mean_val = sum(accuracies.values()) / len(accuracies)
 
     summary = {
@@ -298,9 +357,331 @@ def build_hyperparam_figures(hp_results: list[dict[str, Any]], dataset: str):
     return table_data, scatter_fig, "\n".join(summary_lines)
 
 
-def create_dash_app(results_csv: Path, data_dir: Path, hp_dir: Path):
+def build_global_metrics_conclusion(payload: dict[str, Any]) -> str:
+    df = payload.get("raw")
+    if df is None or df.empty:
+        return "No results available to derive global conclusions."
+
+    # Best classifier per dataset (by accuracy)
+    winners = (
+        df.loc[df.groupby("dataset")["accuracy"].idxmax(), ["dataset", "classifier"]]
+        .groupby("classifier")
+        .size()
+        .sort_values(ascending=False)
+    )
+    top_global = winners.index[0] if not winners.empty else "N/A"
+    top_global_wins = int(winners.iloc[0]) if not winners.empty else 0
+
+    mean_acc = df.groupby("classifier")["accuracy"].mean().sort_values(ascending=False)
+    tsf_mean = float(mean_acc.get("TSF (ours)", float("nan")) * 100) if "TSF (ours)" in mean_acc else None
+    tsf_rank = int(mean_acc.index.get_loc("TSF (ours)") + 1) if "TSF (ours)" in mean_acc.index else None
+
+    lines = [
+        f"Global conclusion: {top_global} is the most consistent top-accuracy classifier, winning {top_global_wins} dataset(s).",
+    ]
+
+    if tsf_mean is not None and tsf_rank is not None:
+        lines.append(
+            f"TSF (ours) reaches {tsf_mean:.2f}% mean accuracy overall and ranks #{tsf_rank} by average accuracy among available classifiers."
+        )
+
+    lines.append("Recommendation: use this page to select high-accuracy candidates first, then validate deployment cost in the Timing page.")
+    return " ".join(lines)
+
+
+def build_global_timing_conclusion(payload: dict[str, Any]) -> str:
+    df = payload.get("raw")
+    if df is None or df.empty:
+        return "No results available to derive global timing conclusions."
+
+    df_local = df.copy()
+    df_local["total_s"] = df_local["fit_time_s"].fillna(0.0) + df_local["predict_time_s"].fillna(0.0)
+
+    fastest = (
+        df_local.loc[df_local.groupby("dataset")["total_s"].idxmin(), ["dataset", "classifier"]]
+        .groupby("classifier")
+        .size()
+        .sort_values(ascending=False)
+    )
+    fastest_global = fastest.index[0] if not fastest.empty else "N/A"
+    fastest_wins = int(fastest.iloc[0]) if not fastest.empty else 0
+
+    mean_total = df_local.groupby("classifier")["total_s"].mean().sort_values(ascending=True)
+    tsf_mean_total = float(mean_total.get("TSF (ours)", float("nan"))) if "TSF (ours)" in mean_total else None
+    tsf_time_rank = int(mean_total.index.get_loc("TSF (ours)") + 1) if "TSF (ours)" in mean_total.index else None
+
+    lines = [
+        f"Global conclusion: {fastest_global} is the fastest overall by total time in {fastest_wins} dataset(s).",
+    ]
+
+    if tsf_mean_total is not None and tsf_time_rank is not None:
+        lines.append(
+            f"TSF (ours) averages {tsf_mean_total:.2f}s total runtime and ranks #{tsf_time_rank} in speed."
+        )
+
+    lines.append("Recommendation: TSF is a balanced option in several datasets, but always confirm whether its accuracy gain compensates runtime against faster baselines.")
+    return " ".join(lines)
+
+
+def build_global_hyperparam_conclusion(hp_results: list[dict[str, Any]]) -> str:
+    if not hp_results:
+        return "No hyperparameter search files found, so no global optimization conclusion can be drawn yet."
+
+    df = pd.DataFrame(hp_results)
+    if df.empty:
+        return "No hyperparameter search files found, so no global optimization conclusion can be drawn yet."
+
+    best_by_method = df.groupby("method")["best_score"].mean().sort_values(ascending=False)
+    fastest_by_method = df.groupby("method")["elapsed_seconds"].mean().sort_values(ascending=True)
+
+    best_method = str(best_by_method.index[0]) if not best_by_method.empty else "N/A"
+    fastest_method = str(fastest_by_method.index[0]) if not fastest_by_method.empty else "N/A"
+
+    return (
+        f"Global conclusion: for TSF hyperparameter tuning, {best_method} gives the best average optimization score, "
+        f"while {fastest_method} is the fastest search strategy on average. "
+        "Recommendation: pick the best-accuracy method when quality is critical, or the fastest method for quick iteration, then retrain TSF and compare against benchmark classifiers."
+    )
+
+
+def _sanitize_filename(name: str) -> str:
+    return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name)
+
+
+def _image_to_data_uri(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    raw = path.read_bytes()
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _build_image_block(title: str, path: Path) -> html.Div:
+    uri = _image_to_data_uri(path)
+    if uri is None:
+        content = html.Div(f"Image not found: {path.as_posix()}", style={"color": "#a33", "fontSize": "12px"})
+    else:
+        content = html.Img(src=uri, style={"width": "100%", "border": "1px solid #ddd", "borderRadius": "6px"})
+
+    return html.Div(
+        [
+            html.H4(title, style={"marginBottom": "8px"}),
+            content,
+        ],
+        style={"marginBottom": "14px"},
+    )
+
+
+def generate_visual_assets(
+    dataset_name: str,
+    classifier_name: str,
+    data_dir: Path,
+    predictions_dir: Path,
+    viz_dir: Path,
+) -> tuple[list[html.Div], str]:
+    dataset_viz_dir = viz_dir / dataset_name
+    classifier_viz_dir = dataset_viz_dir / _sanitize_filename(classifier_name)
+    dataset_viz_dir.mkdir(parents=True, exist_ok=True)
+    classifier_viz_dir.mkdir(parents=True, exist_ok=True)
+
+    status: list[str] = []
+
+    try:
+        train_file = data_dir / dataset_name / f"{dataset_name}_TRAIN.txt"
+        X_train, y_train = load_ucr_txt_dataset(train_file)
+        generate_dataset_graph(
+            X_train,
+            dataset_name=dataset_name,
+            labels=y_train,
+            max_series=16,
+            save=True,
+            out_dir=dataset_viz_dir,
+        )
+        status.append("TS plots generated")
+    except Exception as exc:
+        status.append(f"TS plots error: {type(exc).__name__}: {exc}")
+
+    pred_file = predictions_dir / dataset_name / f"{_sanitize_filename(classifier_name)}.csv"
+    try:
+        if pred_file.exists():
+            plot_overlay_by_correctness(
+                dataset_name=dataset_name,
+                predictions_csv=pred_file,
+                data_dir=data_dir,
+                split="TEST",
+                max_series=60,
+                save=True,
+                out_dir=classifier_viz_dir,
+            )
+            _, y_true, y_pred = load_predictions_csv(pred_file)
+            plot_confusion_matrix(
+                y_true=y_true,
+                y_pred=y_pred,
+                normalize=False,
+                save=True,
+                out_dir=classifier_viz_dir,
+                dataset_name=dataset_name,
+            )
+            status.append("Prediction plots generated")
+        else:
+            status.append(f"Predictions CSV not found: {pred_file}")
+    except Exception as exc:
+        status.append(f"Prediction plots error: {type(exc).__name__}: {exc}")
+
+    blocks = [
+        _build_image_block("Dataset grid (visualize_TS)", dataset_viz_dir / f"{dataset_name}.png"),
+        _build_image_block("Dataset overlay (visualize_TS)", dataset_viz_dir / f"{dataset_name}_overlay.png"),
+        _build_image_block("Prediction overlay (visualize_predictions)", classifier_viz_dir / f"{dataset_name}_overlay_correctness.png"),
+        _build_image_block("Confusion matrix (visualize_predictions)", classifier_viz_dir / f"{dataset_name}_confusion_matrix.png"),
+    ]
+
+    return blocks, " | ".join(status)
+
+
+def generate_prediction_visual_assets(
+    dataset_name: str,
+    classifier_name: str,
+    data_dir: Path,
+    predictions_dir: Path,
+    viz_dir: Path,
+) -> tuple[list[html.Div], str]:
+    dataset_viz_dir = viz_dir / dataset_name
+    classifier_viz_dir = dataset_viz_dir / _sanitize_filename(classifier_name)
+    classifier_viz_dir.mkdir(parents=True, exist_ok=True)
+
+    status: list[str] = []
+    pred_file = predictions_dir / dataset_name / f"{_sanitize_filename(classifier_name)}.csv"
+
+    try:
+        if pred_file.exists():
+            plot_overlay_by_correctness(
+                dataset_name=dataset_name,
+                predictions_csv=pred_file,
+                data_dir=data_dir,
+                split="TEST",
+                max_series=60,
+                save=True,
+                out_dir=classifier_viz_dir,
+            )
+            _, y_true, y_pred = load_predictions_csv(pred_file)
+            plot_confusion_matrix(
+                y_true=y_true,
+                y_pred=y_pred,
+                normalize=False,
+                save=True,
+                out_dir=classifier_viz_dir,
+                dataset_name=dataset_name,
+            )
+            status.append("Prediction plots generated")
+        else:
+            status.append(f"Predictions CSV not found: {pred_file}")
+    except Exception as exc:
+        status.append(f"Prediction plots error: {type(exc).__name__}: {exc}")
+
+    blocks = [
+        _build_image_block(
+            "Prediction overlay (visualize_predictions)",
+            classifier_viz_dir / f"{dataset_name}_overlay_correctness.png",
+        ),
+        _build_image_block(
+            "Confusion matrix (visualize_predictions)",
+            classifier_viz_dir / f"{dataset_name}_confusion_matrix.png",
+        ),
+    ]
+    return blocks, " | ".join(status)
+
+
+def generate_dataset_visual_assets(
+    dataset_name: str,
+    data_dir: Path,
+    viz_dir: Path,
+    label_filter: Any = "__all__",
+    full_individual: bool = False,
+) -> tuple[html.Div, html.Div, str]:
+    dataset_viz_dir = viz_dir / dataset_name
+    dataset_viz_dir.mkdir(parents=True, exist_ok=True)
+
+    train_file = data_dir / dataset_name / f"{dataset_name}_TRAIN.txt"
+    if not train_file.exists():
+        empty = html.Div(f"Dataset split file not found: {train_file.as_posix()}", style={"color": "#a33", "fontSize": "12px"})
+        return empty, empty, "Dataset file missing"
+
+    try:
+        X_train, y_train = load_ucr_txt_dataset(train_file)
+        include_labels = None if label_filter == "__all__" else [label_filter]
+        preview_n = min(32, int(X_train.shape[0]))
+        max_series = int(X_train.shape[0]) if full_individual else preview_n
+        generate_dataset_graph(
+            X_train,
+            dataset_name=dataset_name,
+            labels=y_train,
+            include_labels=include_labels,
+            max_series=max_series,
+            save=True,
+            out_dir=dataset_viz_dir,
+        )
+        selected_label_txt = "all labels" if label_filter == "__all__" else f"label={label_filter}"
+        mode = "full individual plots" if full_individual else f"preview ({preview_n} series)"
+        status = f"TS plots generated: {mode}, {selected_label_txt}"
+    except Exception as exc:
+        empty = html.Div(f"Error generating dataset plots: {type(exc).__name__}: {exc}", style={"color": "#a33", "fontSize": "12px"})
+        return empty, empty, f"TS plots error: {type(exc).__name__}: {exc}"
+
+    overlay_block = _build_image_block(
+        "Dataset overlay (visualize_TS)",
+        dataset_viz_dir / f"{dataset_name}_overlay.png",
+    )
+    grid_block = _build_image_block(
+        "Individual time series (visualize_TS)",
+        dataset_viz_dir / f"{dataset_name}.png",
+    )
+    return overlay_block, grid_block, status
+
+
+def collect_prediction_availability(predictions_dir: Path) -> dict[str, set[str]]:
+    """Map dataset -> available sanitized classifier names from predictions CSV files."""
+    availability: dict[str, set[str]] = {}
+    if not predictions_dir.exists():
+        return availability
+
+    for ds_dir in predictions_dir.iterdir():
+        if not ds_dir.is_dir():
+            continue
+        csv_names = {
+            p.stem for p in ds_dir.glob("*.csv")
+        }
+        availability[ds_dir.name] = csv_names
+    return availability
+
+
+def collect_dataset_labels(data_dir: Path, dataset_name: str) -> list[Any]:
+    train_file = data_dir / dataset_name / f"{dataset_name}_TRAIN.txt"
+    if not train_file.exists():
+        return []
+    try:
+        _X, y = load_ucr_txt_dataset(train_file)
+    except Exception:
+        return []
+    # Preserve order of first appearance
+    return list(dict.fromkeys(y.tolist()))
+
+
+def create_dash_app(
+    results_csv: Path,
+    data_dir: Path,
+    hp_dir: Path,
+    predictions_dir: Path,
+    viz_dir: Path,
+):
     payload = collect_results(results_csv, data_dir)
     hp_results = collect_hyperparameter_results(hp_dir)
+    metrics_conclusion = build_global_metrics_conclusion(payload)
+    timing_conclusion = build_global_timing_conclusion(payload)
+    hp_conclusion = build_global_hyperparam_conclusion(hp_results)
+    prediction_availability = collect_prediction_availability(predictions_dir)
+    dataset_names = [d["name"] for d in payload["datasets"]]
+    datasets_with_predictions = [d for d in dataset_names if prediction_availability.get(d)]
+    default_viz_dataset = datasets_with_predictions[0] if datasets_with_predictions else (dataset_names[0] if dataset_names else None)
 
     app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
@@ -310,6 +691,7 @@ def create_dash_app(results_csv: Path, data_dir: Path, hp_dir: Path):
             dcc.Tab(label="Metrics", value="tab-metrics"),
             dcc.Tab(label="Timing", value="tab-timing"),
             dcc.Tab(label="Hyperparameter", value="tab-hyperparam"),
+            dcc.Tab(label="Datasets", value="tab-datasets"),
         ], className="tabs-bar"),
         html.Div(id="tab-content", style={"marginTop": "20px", "padding": "12px"}),
         html.Div([
@@ -319,20 +701,46 @@ def create_dash_app(results_csv: Path, data_dir: Path, hp_dir: Path):
         ], style={"marginTop": "40px", "fontSize": "12px", "color": "#666", "textAlign": "center"}),
     ], style={"background": "#f4f4f3"})
 
+    button_style = {
+        "padding": "10px 16px",
+        "fontSize": "14px",
+        "fontWeight": "600",
+        "borderRadius": "8px",
+        "border": "1px solid #b9b9b9",
+        "background": "#ffffff",
+        "cursor": "pointer",
+    }
+
     @app.callback(Output("tab-content", "children"), [Input("tabs", "value")])
     def render_tab(tab):
         if tab == "tab-metrics":
             ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
-            cls_opts = [{"label": c, "value": c} for c in payload["classifiers"]]
             return html.Div([
-                html.Div([html.P("Metrics tab provides accuracy comparison of classifiers for selected dataset. Choose dataset and classifier to inspect performance metrics and trends." )], style={"marginBottom": "10px", "color": "#444"}),
-                html.Div([
-                    html.Div([html.Label("Dataset"), dcc.Dropdown(id="metrics-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "45%", "display": "inline-block", "verticalAlign": "top"}),
-                    html.Div([html.Label("Classifier"), dcc.Dropdown(id="metrics-classifier", options=cls_opts, value=cls_opts[0]["value"], clearable=False)], style={"width": "45%", "display": "inline-block", "marginLeft": "20px", "verticalAlign": "top"}),
-                ]),
-                html.Div(id="metrics-summary", style={"marginTop": "12px"}),
-                dcc.Graph(id="metrics-bar"),
+                html.Div([html.P("Metrics tab provides global accuracy trends first, then a selected-dataset breakdown with data size details." )], style={"marginBottom": "10px", "color": "#444"}),
                 dcc.Graph(id="metrics-line"),
+                html.Div([
+                    html.Div([
+                        html.Label("Dataset"),
+                        dcc.Dropdown(id="metrics-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False),
+                        html.Div(id="metrics-dataset-info", style={"marginTop": "10px", "marginBottom": "8px", "color": "#444"}),
+                        html.Div(id="metrics-summary", style={"marginTop": "4px"}),
+                    ], style={"flex": "0 0 32%", "paddingRight": "12px"}),
+                    html.Div([
+                        dcc.Graph(id="metrics-bar"),
+                    ], style={"flex": "1"}),
+                ], style={"display": "flex", "alignItems": "flex-start"}),
+                html.Div(
+                    metrics_conclusion,
+                    style={"marginTop": "14px", "padding": "12px", "background": "#f9f9f9", "border": "1px solid #ddd", "borderRadius": "8px", "color": "#333"},
+                ),
+                html.Div([
+                    html.Div([
+                        html.Label("Classifier"),
+                        dcc.Dropdown(id="metrics-classifier", clearable=False),
+                    ], style={"width": "38%", "display": "inline-block", "verticalAlign": "top"}),
+                    html.Div(id="metrics-pred-status", style={"width": "58%", "display": "inline-block", "marginLeft": "4%", "marginTop": "22px", "color": "#444", "fontSize": "12px"}),
+                ], style={"marginTop": "12px", "marginBottom": "8px"}),
+                html.Div(id="metrics-pred-images"),
             ])
         if tab == "tab-timing":
             ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
@@ -343,32 +751,150 @@ def create_dash_app(results_csv: Path, data_dir: Path, hp_dir: Path):
                     html.Div([html.Label("Dataset"), dcc.Dropdown(id="timing-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "45%", "display": "inline-block"}),
                     html.Div([html.Label("Metric"), dcc.Dropdown(id="timing-metric", options=metric_opts, value="total", clearable=False)], style={"width": "45%", "display": "inline-block", "marginLeft": "20px"}),
                 ]),
-                html.Div([html.Button("Mostrar/bloquear otros gráficos", id="toggle-graphs", n_clicks=0)], style={"margin":"10px 0"}),
+                html.Div([html.Button("Mostrar/bloquear otros gráficos", id="toggle-graphs", n_clicks=0, style=button_style)], style={"margin":"10px 0"}),
                 html.Div([html.P("Bubble chart: each point represents a dataset/technique pair. X=dataset size, Y=series length, size=time depending on selected metric.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"})]),
                 dcc.Graph(id="timing-bubble"),
                 html.Div([
                     html.Div([html.P("Stacked horizontal bar chart: technique timings according to selected metric.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"}), dcc.Graph(id="timing-bar", style={"height": "480px"})], style={"flex": "1", "paddingRight": "10px"}),
                     html.Div([html.P("Profile chart: per-dataset total or individual timing bars by technique.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"}), dcc.Graph(id="timing-profile", style={"height": "480px"})], style={"flex": "1", "paddingLeft": "10px"}),
                 ], id="timing-extra-graphs", style={"display":"flex", "flexDirection":"row", "alignItems": "flex-start"}),
+                html.Div(
+                    timing_conclusion,
+                    style={"marginTop": "14px", "padding": "12px", "background": "#f9f9f9", "border": "1px solid #ddd", "borderRadius": "8px", "color": "#333"},
+                ),
             ])
         ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
+        if tab == "tab-hyperparam":
+            return html.Div([
+                html.Div([html.P("Hyperparameter tab visualizes best obtained score and elapsed time for optimization methods. Use this view to compare search quality and training speed.")], style={"marginBottom": "10px", "color": "#444"}),
+                html.Div([html.Label("Dataset"), dcc.Dropdown(id="hp-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "30%", "marginBottom": "10px"}),
+                dash_table.DataTable(id="hp-table", columns=[{"name": "Method", "id": "method"}, {"name": "Best Score", "id": "best_score"}, {"name": "Elapsed s", "id": "elapsed_seconds"}, {"name": "Best params", "id": "best_params"}], style_table={"overflowX": "auto"}, style_cell={"textAlign": "left", "fontSize": "13px"}),
+                html.Div([html.P("Scatter chart: each point is an hyperparameter trial; x=elapsed time, y=accuracy; bigger points are best accuracy for method.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"})]),
+                dcc.Graph(id="hp-scatter"),
+                html.Pre(id="hp-summary", style={"whiteSpace": "pre-wrap", "marginTop": "12px"}),
+                html.Div(
+                    hp_conclusion,
+                    style={"marginTop": "14px", "padding": "12px", "background": "#f9f9f9", "border": "1px solid #ddd", "borderRadius": "8px", "color": "#333"},
+                ),
+            ])
+
         return html.Div([
-            html.Div([html.P("Hyperparameter tab visualizes best obtained score and elapsed time for optimization methods. Use this view to compare search quality and training speed.")], style={"marginBottom": "10px", "color": "#444"}),
-            html.Div([html.Label("Dataset"), dcc.Dropdown(id="hp-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "30%", "marginBottom": "10px"}),
-            dash_table.DataTable(id="hp-table", columns=[{"name": "Method", "id": "method"}, {"name": "Best Score", "id": "best_score"}, {"name": "Elapsed s", "id": "elapsed_seconds"}, {"name": "Best params", "id": "best_params"}], style_table={"overflowX": "auto"}, style_cell={"textAlign": "left", "fontSize": "13px"}),
-            html.Div([html.P("Scatter chart: each point is an hyperparameter trial; x=elapsed time, y=accuracy; bigger points are best accuracy for method.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"})]),
-            dcc.Graph(id="hp-scatter"),
-            html.Pre(id="hp-summary", style={"whiteSpace": "pre-wrap", "marginTop": "12px"}),
+            html.Div([html.P("Datasets tab embeds outputs from visualize_TS.py for selected dataset." )], style={"marginBottom": "10px", "color": "#444"}),
+            html.Div([
+                html.Div([html.Label("Dataset"), dcc.Dropdown(id="datasets-dataset", options=ds_opts, value=default_viz_dataset, clearable=False)], style={"width": "40%", "display": "inline-block"}),
+                html.Div([html.Button("Show all individual time series", id="datasets-plot-all", n_clicks=0, style=button_style)], style={"width": "40%", "display": "inline-block", "marginLeft": "20px", "paddingTop": "22px"}),
+            ], style={"marginBottom": "12px"}),
+            html.Div([
+                html.Label("Label filter"),
+                dcc.RadioItems(
+                    id="datasets-label-filter",
+                    inline=True,
+                    inputStyle={"transform": "scale(1.45)", "marginRight": "8px"},
+                    labelStyle={
+                        "display": "inline-flex",
+                        "alignItems": "center",
+                        "marginRight": "20px",
+                        "fontSize": "16px",
+                        "fontWeight": "600",
+                    },
+                ),
+            ], style={"marginBottom": "10px", "color": "#444", "fontSize": "12px"}),
+            html.Div("Plots are displayed below this control panel.", style={"marginBottom": "8px", "color": "#555", "fontSize": "12px"}),
+            html.Div(id="datasets-status", style={"marginBottom": "10px", "color": "#444", "fontSize": "12px"}),
+            html.Div([
+                html.Div(id="datasets-overlay-image", style={"flex": "1.25"}),
+                html.Div(id="datasets-individual-image", style={"display": "none", "flex": "1"}),
+            ], style={"display": "flex", "gap": "12px", "alignItems": "flex-start"}),
         ])
 
-    @app.callback([Output("metrics-bar", "figure"), Output("metrics-line", "figure"), Output("metrics-summary", "children")], [Input("metrics-dataset", "value")])
-    def update_metrics(dataset_value):
-        fig_bar, fig_line, summary = build_metrics_figures(payload, dataset_value)
-        summary_el = html.Div([html.P(f"Best classifier: {summary['best']}"), html.P(f"Worst classifier: {summary['worst']}"), html.P(f"Mean accuracy: {summary['mean']}")])
-        return fig_bar, fig_line, summary_el
+    @app.callback(
+        [Output("datasets-label-filter", "options"), Output("datasets-label-filter", "value")],
+        [Input("datasets-dataset", "value")],
+    )
+    def update_dataset_label_options(dataset_value):
+        labels = collect_dataset_labels(data_dir, dataset_value)
+        options = [{"label": "All", "value": "__all__"}] + [
+            {"label": str(lbl), "value": lbl} for lbl in labels
+        ]
+        return options, "__all__"
 
     @app.callback(
-        [Output("timing-bar", "figure"), Output("timing-bubble", "figure"), Output("timing-profile", "figure")],
+        [Output("metrics-classifier", "options"), Output("metrics-classifier", "value")],
+        [Input("metrics-dataset", "value")],
+    )
+    def update_metrics_classifier_options(dataset_value):
+        available = prediction_availability.get(dataset_value, set())
+        all_classifiers = payload["classifiers"]
+        preferred = [c for c in all_classifiers if _sanitize_filename(c) in available]
+        if preferred:
+            return [{"label": c, "value": c} for c in preferred], preferred[0]
+        return [{"label": c, "value": c} for c in all_classifiers], all_classifiers[0] if all_classifiers else None
+
+    @app.callback(
+        [
+            Output("metrics-bar", "figure"),
+            Output("metrics-line", "figure"),
+            Output("metrics-summary", "children"),
+            Output("metrics-dataset-info", "children"),
+            Output("metrics-pred-images", "children"),
+            Output("metrics-pred-status", "children"),
+        ],
+        [Input("metrics-dataset", "value"), Input("metrics-classifier", "value")],
+    )
+    def update_metrics(dataset_value, classifier_value):
+        fig_bar, fig_line, summary = build_metrics_figures(payload, dataset_value)
+        summary_el = html.Div([html.P(f"Best classifier: {summary['best']}"), html.P(f"Worst classifier: {summary['worst']}"), html.P(f"Mean accuracy: {summary['mean']}")])
+        ds_stats = next((d for d in payload["datasets"] if d["name"] == dataset_value), None)
+        if ds_stats is None:
+            dataset_info = html.P("Dataset details not available")
+        else:
+            n_train = ds_stats.get("nTrain")
+            n_test = ds_stats.get("nTest")
+            n_series = ds_stats.get("nSeries")
+            length = ds_stats.get("length")
+            dataset_info = html.P(
+                f"{dataset_value}: train={n_train}, test={n_test}, total={n_series}, series length={length}",
+            )
+
+        pred_images: Any = []
+        pred_status = ""
+        if classifier_value:
+            pred_blocks, pred_status = generate_prediction_visual_assets(
+                dataset_name=dataset_value,
+                classifier_name=classifier_value,
+                data_dir=data_dir,
+                predictions_dir=predictions_dir,
+                viz_dir=viz_dir,
+            )
+            available = prediction_availability.get(dataset_value, set())
+            if _sanitize_filename(classifier_value) not in available:
+                pred_status = (
+                    pred_status
+                    + " | No prediction CSV for this dataset/classifier pair. "
+                    + "Run: python experiments/main_run.py --mode predict --datasets "
+                    + dataset_value
+                )
+
+            pred_images = html.Div(
+                [
+                    html.Div(pred_blocks[0], style={"flex": "1.25"}),
+                    html.Div(pred_blocks[1], style={"flex": "0.75"}),
+                ],
+                style={
+                    "display": "flex",
+                    "gap": "12px",
+                    "alignItems": "start",
+                },
+            )
+
+        return fig_bar, fig_line, summary_el, dataset_info, pred_images, pred_status
+
+    @app.callback(
+        [
+            Output("timing-bar", "figure"),
+            Output("timing-bubble", "figure"),
+            Output("timing-profile", "figure"),
+        ],
         [Input("timing-dataset", "value"), Input("timing-metric", "value")]
     )
     def update_timing(dataset_value, metric_value):
@@ -384,10 +910,56 @@ def create_dash_app(results_csv: Path, data_dir: Path, hp_dir: Path):
             return {"display": "block"}
         return {"display": "none"}
 
-    @app.callback([Output("hp-table", "data"), Output("hp-scatter", "figure"), Output("hp-summary", "children")], [Input("hp-dataset", "value")])
+    @app.callback(
+        [
+            Output("hp-table", "data"),
+            Output("hp-scatter", "figure"),
+            Output("hp-summary", "children"),
+        ],
+        [Input("hp-dataset", "value")],
+    )
     def update_hp(dataset_value):
         table_data, scatter_fig, summary_text = build_hyperparam_figures(hp_results, dataset_value)
         return table_data, scatter_fig, summary_text
+
+    @app.callback(
+        [Output("datasets-overlay-image", "children"), Output("datasets-status", "children")],
+        [Input("datasets-dataset", "value"), Input("datasets-label-filter", "value")],
+    )
+    def update_dataset_overlay(dataset_value, label_filter):
+        overlay_block, _grid_block, status = generate_dataset_visual_assets(
+            dataset_name=dataset_value,
+            data_dir=data_dir,
+            viz_dir=viz_dir,
+            label_filter=label_filter,
+            full_individual=False,
+        )
+        return [overlay_block], status
+
+    @app.callback(
+        [
+            Output("datasets-individual-image", "children"),
+            Output("datasets-individual-image", "style"),
+            Output("datasets-plot-all", "children"),
+        ],
+        [
+            Input("datasets-plot-all", "n_clicks"),
+            Input("datasets-dataset", "value"),
+            Input("datasets-label-filter", "value"),
+        ],
+    )
+    def update_dataset_individual(n_clicks, dataset_value, label_filter):
+        if not n_clicks or n_clicks % 2 == 0:
+            return [], {"display": "none"}, "Show all individual time series"
+
+        _overlay_block, grid_block, _status = generate_dataset_visual_assets(
+            dataset_name=dataset_value,
+            data_dir=data_dir,
+            viz_dir=viz_dir,
+            label_filter=label_filter,
+            full_individual=True,
+        )
+        return [grid_block], {"display": "block", "flex": "1"}, "Hide individual time series"
 
     return app
 
@@ -397,12 +969,20 @@ def main():
     parser.add_argument("--results", default="results/benchmark_comparison.csv")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--hp-dir", default="results")
+    parser.add_argument("--predictions-dir", default="results/predictions")
+    parser.add_argument("--viz-dir", default="visualization")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8050, type=int)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    app = create_dash_app(Path(args.results), Path(args.data_dir), Path(args.hp_dir))
+    app = create_dash_app(
+        Path(args.results),
+        Path(args.data_dir),
+        Path(args.hp_dir),
+        Path(args.predictions_dir),
+        Path(args.viz_dir),
+    )
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 

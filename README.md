@@ -41,7 +41,7 @@ The following command shows how to invoke `main_run.py` with every supported arg
 python experiments/main_run.py \
   --mode train \
   --datasets ItalyPowerDemand,GunPoint,ECG5000,InlineSkate,ElectricDevices \
-  --benchmarks "1NN-DTW,BOSS-ensemble,Rocket" \
+  --benchmarks "1NN-DTW,1NN-ED,BOSS-ensemble,Rocket" \
   --data-dir data \
   --output-csv results/benchmark_comparison.csv \
   --model-dir trained_models \
