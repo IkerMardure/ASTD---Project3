@@ -7,6 +7,7 @@ to compare classifiers with consistent metrics.
 from __future__ import annotations
 
 import csv
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 import time
 from typing import Any
@@ -39,6 +40,24 @@ def _sanitize_filename(name: str) -> str:
 
 def _ensure_dir(path: Path) -> None:
 	path.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_tsf_config(
+	dataset_name: str,
+	tsf_params: dict[str, dict[str, int]] | None,
+	default_n_estimators: int,
+	default_min_interval: int,
+	random_state: int | None,
+) -> TSFConfig:
+	if not tsf_params:
+		return TSFConfig(n_estimators=default_n_estimators, min_interval_length=default_min_interval, random_state=random_state)
+	lookup = dataset_name if dataset_name in tsf_params else next((k for k in tsf_params.keys() if k.lower() == dataset_name.lower()), None)
+	values = tsf_params.get(lookup, {}) if lookup is not None else {}
+	return TSFConfig(
+		n_estimators=values.get("n_estimators", default_n_estimators),
+		min_interval_length=values.get("min_interval_length", default_min_interval),
+		random_state=random_state,
+	)
 
 
 def _prompt_load_or_retrain(model_path: Path, allow_load_all: bool = True) -> str:
@@ -258,6 +277,7 @@ def run_benchmark_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	tsf_config: TSFConfig | None = None,
 ) -> list[dict[str, Any]]:
 	"""Run the default benchmark suite on one dataset.
 
@@ -278,12 +298,8 @@ def run_benchmark_suite(
 
 	if include_tsf:
 		try:
-			tsfc = AeonTSFClassifier(
-				config=TSFConfig(
-					n_estimators=n_estimators_tsf,
-					random_state=random_state,
-				)
-			)
+			cfg = tsf_config or TSFConfig(n_estimators=n_estimators_tsf, random_state=random_state)
+			tsfc = AeonTSFClassifier(config=cfg)
 			rows.append(
 				_evaluate_model(
 					model=tsfc,
@@ -348,6 +364,7 @@ def run_train_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	tsf_config: TSFConfig | None = None,
 	ask_on_existing_model: bool = False,
 	load_existing_if_available: bool = False,
 	model_dir: str | Path = "trained_models",
@@ -442,12 +459,8 @@ def run_train_suite(
 				handled = True
 			elif action == "retrain":
 				try:
-					tsfc = AeonTSFClassifier(
-						config=TSFConfig(
-							n_estimators=n_estimators_tsf,
-							random_state=random_state,
-						)
-					)
+					cfg = tsf_config or TSFConfig(n_estimators=n_estimators_tsf, random_state=random_state)
+					tsfc = AeonTSFClassifier(config=cfg)
 					rows.append(
 						_evaluate_model(
 							model=tsfc,
@@ -478,12 +491,8 @@ def run_train_suite(
 
 		if not handled:
 			try:
-				tsfc = AeonTSFClassifier(
-					config=TSFConfig(
-						n_estimators=n_estimators_tsf,
-						random_state=random_state,
-					)
-				)
+				cfg = tsf_config or TSFConfig(n_estimators=n_estimators_tsf, random_state=random_state)
+				tsfc = AeonTSFClassifier(config=cfg)
 				rows.append(
 					_evaluate_model(
 						model=tsfc,
@@ -730,6 +739,28 @@ def run_predict_suite(
 run_forecast_suite = run_predict_suite
 
 
+def _benchmark_dataset_task(args: tuple[str, str | Path, list[str] | None, bool, int | None, int, dict[str, dict[str, int]] | None]) -> list[dict[str, Any]]:
+	"""Module-level helper for pickle-safe multiprocessing benchmark task."""
+	dataset_name, data_dir, benchmark_names, include_tsf, random_state, n_estimators_tsf, tsf_params = args
+	print(f"\n[dataset {dataset_name}]", flush=True)
+	dataset_tsf_config = _resolve_tsf_config(
+		dataset_name=dataset_name,
+		tsf_params=tsf_params,
+		default_n_estimators=n_estimators_tsf,
+		default_min_interval=TSFConfig().min_interval_length,
+		random_state=random_state,
+	)
+	return run_benchmark_suite(
+		dataset_name=dataset_name,
+		data_dir=data_dir,
+		benchmark_names=benchmark_names,
+		include_tsf=include_tsf,
+		random_state=random_state,
+		n_estimators_tsf=n_estimators_tsf,
+		tsf_config=dataset_tsf_config,
+	)
+
+
 def run_benchmarks_on_datasets(
 	datasets: list[str],
 	data_dir: str | Path = "data",
@@ -737,21 +768,145 @@ def run_benchmarks_on_datasets(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	tsf_params: dict[str, dict[str, int]] | None = None,
+	jobs: int = 1,
 ) -> list[dict[str, Any]]:
 	"""Run benchmark suite across multiple datasets."""
 	print(f"Starting benchmark run: {len(datasets)} dataset(s) × up to {len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers", flush=True)
+
 	all_rows: list[dict[str, Any]] = []
-	for i, dataset_name in enumerate(datasets, 1):
-		print(f"\n[{i}/{len(datasets)}]", end=" ", flush=True)
-		rows = run_benchmark_suite(
-			dataset_name=dataset_name,  # noqa: E501
+	if jobs is None or jobs <= 1:
+		for dataset_name in datasets:
+			all_rows.extend(_benchmark_dataset_task((dataset_name, data_dir, benchmark_names, include_tsf, random_state, n_estimators_tsf, tsf_params)))
+	else:
+		worker_count = min(jobs, cpu_count())
+		print(f"Running benchmarks in parallel with {worker_count} workers.")
+		with Pool(processes=worker_count) as pool:
+			args_list = [
+				(dataset_name, data_dir, benchmark_names, include_tsf, random_state, n_estimators_tsf, tsf_params)
+				for dataset_name in datasets
+			]
+			for dataset_rows in pool.imap_unordered(_benchmark_dataset_task, args_list):
+				all_rows.extend(dataset_rows)
+
+	return all_rows
+
+
+def _train_dataset_task(args: tuple[str, str | Path, list[str] | None, bool, int | None, int, dict[str, dict[str, int]] | None, bool, bool, str | Path]) -> list[dict[str, Any]]:
+	"""Module-level helper for pickle-safe multiprocessing train task."""
+	dataset_name, data_dir, benchmark_names, include_tsf, random_state, n_estimators_tsf, tsf_params, ask_on_existing_model, load_existing_if_available, model_dir = args
+	print(f"\n[dataset {dataset_name}] train", flush=True)
+	dataset_tsf_config = _resolve_tsf_config(
+		dataset_name=dataset_name,
+		tsf_params=tsf_params,
+		default_n_estimators=n_estimators_tsf,
+		default_min_interval=TSFConfig().min_interval_length,
+		random_state=random_state,
+	)
+	return run_train_suite(
+		dataset_name=dataset_name,
+		data_dir=data_dir,
+		benchmark_names=benchmark_names,
+		include_tsf=include_tsf,
+		random_state=random_state,
+		n_estimators_tsf=n_estimators_tsf,
+		tsf_config=dataset_tsf_config,
+		ask_on_existing_model=ask_on_existing_model,
+		load_existing_if_available=load_existing_if_available,
+		model_dir=model_dir,
+	)
+
+
+def run_train_on_datasets(
+	datasets: list[str],
+	data_dir: str | Path = "data",
+	benchmark_names: list[str] | None = None,
+	include_tsf: bool = True,
+	random_state: int | None = 42,
+	n_estimators_tsf: int = 200,
+	tsf_params: dict[str, dict[str, int]] | None = None,
+	ask_on_existing_model: bool = False,
+	load_existing_if_available: bool = False,
+	model_dir: str | Path = "trained_models",
+	jobs: int = 1,
+) -> list[dict[str, Any]]:
+	"""Train models for multiple datasets, optionally in parallel."""
+	def _train_task(dataset_name: str) -> list[dict[str, Any]]:
+		print(f"\n[dataset {dataset_name}] train", flush=True)
+		dataset_tsf_config = _resolve_tsf_config(
+			dataset_name=dataset_name,
+			tsf_params=tsf_params,
+			default_n_estimators=n_estimators_tsf,
+			default_min_interval=TSFConfig().min_interval_length,
+			random_state=random_state,
+		)
+		return run_train_suite(
+			dataset_name=dataset_name,
 			data_dir=data_dir,
 			benchmark_names=benchmark_names,
 			include_tsf=include_tsf,
 			random_state=random_state,
 			n_estimators_tsf=n_estimators_tsf,
+			tsf_config=dataset_tsf_config,
+			ask_on_existing_model=ask_on_existing_model,
+			load_existing_if_available=load_existing_if_available,
+			model_dir=model_dir,
 		)
-		all_rows.extend(rows)
+
+	all_rows: list[dict[str, Any]] = []
+	if jobs is None or jobs <= 1:
+		for dataset_name in datasets:
+			all_rows.extend(_train_dataset_task((dataset_name,data_dir,benchmark_names,include_tsf,random_state,n_estimators_tsf,tsf_params,ask_on_existing_model,load_existing_if_available,model_dir)))
+	else:
+		worker_count = min(jobs, cpu_count())
+		print(f"Running train in parallel with {worker_count} workers.")
+		with Pool(processes=worker_count) as pool:
+			args_list = [
+				(dataset_name,data_dir,benchmark_names,include_tsf,random_state,n_estimators_tsf,tsf_params,ask_on_existing_model,load_existing_if_available,model_dir)
+				for dataset_name in datasets
+			]
+			for dataset_rows in pool.imap_unordered(_train_dataset_task, args_list):
+				all_rows.extend(dataset_rows)
+
+	return all_rows
+
+
+def run_predict_on_datasets(
+	datasets: list[str],
+	data_dir: str | Path = "data",
+	benchmark_names: list[str] | None = None,
+	include_tsf: bool = True,
+	random_state: int | None = 42,
+	n_estimators_tsf: int = 200,
+	model_dir: str | Path = "trained_models",
+	predictions_dir: str | Path = "results/predictions",
+	jobs: int = 1,
+) -> list[dict[str, Any]]:
+	"""Run prediction for multiple datasets, optionally in parallel."""
+	def _predict_task(dataset_name: str) -> list[dict[str, Any]]:
+		print(f"\n[dataset {dataset_name}] predict", flush=True)
+		return run_predict_suite(
+			dataset_name=dataset_name,
+			data_dir=data_dir,
+			benchmark_names=benchmark_names,
+			include_tsf=include_tsf,
+			random_state=random_state,
+			n_estimators_tsf=n_estimators_tsf,
+			model_dir=model_dir,
+			predictions_dir=predictions_dir,
+		)
+
+	all_rows: list[dict[str, Any]] = []
+	if jobs is None or jobs <= 1:
+		for dataset_name in datasets:
+			all_rows.extend(_predict_task(dataset_name))
+	else:
+		worker_count = min(jobs, cpu_count())
+		print(f"Running predict in parallel with {worker_count} workers.")
+		with Pool(processes=worker_count) as pool:
+			for dataset_rows in pool.imap_unordered(_predict_task, datasets):
+				all_rows.extend(dataset_rows)
+
 	return all_rows
 
 

@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,predictions_path
+ECG5000,TSF (ours),0.9413333333333334,0.0,27.711142200045288,ok,,results\predictions\ECG5000\TSF__ours_.csv
+ECG5000,1NN-DTW,0.9244444444444444,0.0,783.8907826000359,ok,,results\predictions\ECG5000\1NN-DTW.csv
+ECG5000,1NN-ED,0.9248888888888889,0.0,0.27012240001931787,ok,,results\predictions\ECG5000\1NN-ED.csv
+ECG5000,BOSS-ensemble,0.94,0.0,162.28143570001703,ok,,results\predictions\ECG5000\BOSS-ensemble.csv
+ECG5000,Rocket,0.9473333333333334,0.0,46.85114220005926,ok,,results\predictions\ECG5000\Rocket.csv

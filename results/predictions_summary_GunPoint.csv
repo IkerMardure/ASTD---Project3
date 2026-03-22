@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,predictions_path
+GunPoint,TSF (ours),0.9666666666666667,0.0,2.4927728000329807,ok,,results\predictions\GunPoint\TSF__ours_.csv
+GunPoint,1NN-DTW,0.9066666666666666,0.0,2.7413967999164015,ok,,results\predictions\GunPoint\1NN-DTW.csv
+GunPoint,1NN-ED,0.9133333333333333,0.0,0.026467100018635392,ok,,results\predictions\GunPoint\1NN-ED.csv
+GunPoint,BOSS-ensemble,1.0,0.0,2.8715716999722645,ok,,results\predictions\GunPoint\BOSS-ensemble.csv
+GunPoint,Rocket,1.0,0.0,1.3586962999543175,ok,,results\predictions\GunPoint\Rocket.csv

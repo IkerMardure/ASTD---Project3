@@ -482,19 +482,19 @@ def run_hyperparameter_search(
 # Example usage with real datasets (UCR/UEA format)
 if __name__ == "__main__":
     from aeon.datasets import load_from_ts_file
-    #datasets = [
-     #   "ECG5000",
-      #  "ElectricDevices",
-       # "GunPoint",
-        #"InlineSkate",
-        #"ItalyPowerDemand",
-    #]
+    datasets = [
+        "ECG5000",
+        "ElectricDevices",
+        "GunPoint",
+        "InlineSkate",
+        "ItalyPowerDemand",
+    ]
 
-    datasets = ["GunPoint"]
+    #datasets = ["GunPoint"]
 
-    #methods = ["optuna", "grid", "random"]
+    methods = ["optuna", "grid", "random"]
 
-    methods = ["optuna"]
+    #methods = ["optuna"]
 
     for dataset_name in datasets:
         print(f"\n{'#' * 70}")
@@ -524,7 +524,7 @@ if __name__ == "__main__":
                 X=X,
                 y=y,
                 method=method,
-                cv=3, #5,
+                cv=5, #5,
                 metric="accuracy",
                 random_state=42,
                 n_trials=3, #20,   # optuna

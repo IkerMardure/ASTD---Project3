@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,predictions_path
+InlineSkate,TSF (ours),0.3690909090909091,0.0,12.954374399967492,ok,,results\predictions\InlineSkate\TSF__ours_.csv
+InlineSkate,1NN-DTW,0.3836363636363636,0.0,4372.664064500015,ok,,results\predictions\InlineSkate\1NN-DTW.csv
+InlineSkate,1NN-ED,0.3418181818181818,0.0,0.08392270002514124,ok,,results\predictions\InlineSkate\1NN-ED.csv
+InlineSkate,BOSS-ensemble,0.46545454545454545,0.0,8.741197300027125,ok,,results\predictions\InlineSkate\BOSS-ensemble.csv
+InlineSkate,Rocket,0.4709090909090909,0.0,77.36326250003185,ok,,results\predictions\InlineSkate\Rocket.csv

@@ -13,5 +13,5 @@ SPEC = BenchmarkSpec(
     name="1NN-ED",
     module="aeon.classification.distance_based",
     class_name="KNeighborsTimeSeriesClassifier",
-    kwargs={"n_neighbors": 1, "distance": "euclidean"},
+    kwargs={"n_neighbors": 1, "distance": "euclidean", "n_jobs": -1},
 )

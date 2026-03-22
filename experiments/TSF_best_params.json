@@ -1,0 +1,22 @@
+{
+    "ECG5000": {
+        "n_estimators": 250, 
+        "min_interval_length": 6
+    },
+    "ElectricDevises": {
+        "n_estimators": 300,
+        "min_interval_length": 3
+    },
+    "GunPoint": {
+        "n_estimators": 100,
+        "min_interval_length": 3
+    },
+    "InlineSkate": {
+        "n_estimators":200,
+        "min_interval_length": 3
+    },
+    "ItalyPowerDemand": {
+        "n_estimators": 300,
+        "min_interval_length": 5
+    }
+}

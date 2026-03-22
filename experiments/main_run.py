@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -22,6 +23,8 @@ from classifiers.benchmarks.suite import DEFAULT_BENCHMARK_SPECS
 from experiments.validation import (
 	format_results_table,
 	run_benchmarks_on_datasets,
+	run_train_on_datasets,
+	run_predict_on_datasets,
 	run_train_suite,
 	run_predict_suite,
 	# Keep old name for backward compatibility
@@ -71,6 +74,28 @@ def _resolve_output_path(output_template: str, dataset: str, multiple_datasets: 
 	return output_template
 
 
+def load_tsf_params(tsf_config_path: str | None) -> dict[str, dict[str, int]]:
+	"""Load a per-dataset TSF config JSON file."""
+	if not tsf_config_path:
+		return {}
+	with open(tsf_config_path, "r", encoding="utf-8") as handle:
+		params = json.load(handle)
+	if not isinstance(params, dict):
+		raise ValueError("tsf config file must be a JSON object mapping dataset names to config dicts")
+	return params
+
+
+def _resolve_tsf_params(dataset_name: str, tsf_params: dict[str, dict[str, int]], default_n_estimators: int, default_min_interval: int, random_state: int) -> TSFConfig:
+	# Key matching is case-insensitive to support common variations.
+	lookup = dataset_name if dataset_name in tsf_params else next((k for k in tsf_params if k.lower() == dataset_name.lower()), None)
+	config_dict = tsf_params.get(lookup, {}) if lookup is not None else {}
+	return TSFConfig(
+		n_estimators=config_dict.get("n_estimators", default_n_estimators),
+		min_interval_length=config_dict.get("min_interval_length", default_min_interval),
+		random_state=random_state,
+	)
+
+
 def main() -> None:
 	parser = argparse.ArgumentParser(description="Run TSF experiments and benchmark comparisons.")
 	parser.add_argument(
@@ -115,6 +140,12 @@ def main() -> None:
 		help="Directory containing UCR dataset folders.",
 	)
 	parser.add_argument(
+		"--tsf-config",
+		type=str,
+		default=None,
+		help="Optional JSON file path with per-dataset TSF config values (n_estimators, min_interval_length).",
+	)
+	parser.add_argument(
 		"--output-csv",
 		type=str,
 		default="results/benchmark_comparison.csv",
@@ -136,6 +167,12 @@ def main() -> None:
 		"--no-tsf",
 		action="store_true",
 		help="Exclude TSF (ours) from benchmark runs.",
+	)
+	parser.add_argument(
+		"--jobs",
+		type=int,
+		default=1,
+		help="Number of dataset-level worker processes for parallel train/predict/benchmark. 1=serial.",
 	)
 	parser.add_argument(
 		"--load-all",
@@ -165,6 +202,7 @@ def main() -> None:
 
 	datasets = _parse_csv_list(args.datasets)
 	benchmark_names = _parse_csv_list(args.benchmarks) if args.benchmarks else None
+	tsf_params = load_tsf_params(args.tsf_config)
 
 	# Resolve output file naming to avoid overwriting when running with multiple datasets.
 	# If the template includes {dataset}, it will be substituted.
@@ -180,6 +218,8 @@ def main() -> None:
 			include_tsf=not args.no_tsf,
 			random_state=args.seed,
 			n_estimators_tsf=args.n_estimators,
+			tsf_params=tsf_params,
+			jobs=args.jobs,
 		)
 
 		print(format_results_table(rows))
@@ -201,21 +241,19 @@ def main() -> None:
 				print(f"Saved per-dataset results to: {per_dataset_path}")
 
 	elif args.mode == "train":
-		rows = []
-		for dataset in datasets:
-			rows.extend(
-				run_train_suite(
-					dataset_name=dataset,
-					data_dir=args.data_dir,
-					benchmark_names=benchmark_names,
-					include_tsf=not args.no_tsf,
-					random_state=args.seed,
-					n_estimators_tsf=args.n_estimators,
-					ask_on_existing_model=not args.load_all,
-					load_existing_if_available=args.load_all,
-					model_dir=args.model_dir,
-				)
-			)
+		rows = run_train_on_datasets(
+			datasets=datasets,
+			data_dir=args.data_dir,
+			benchmark_names=benchmark_names,
+			include_tsf=not args.no_tsf,
+			random_state=args.seed,
+			n_estimators_tsf=args.n_estimators,
+			tsf_params=tsf_params,
+			ask_on_existing_model=not args.load_all,
+			load_existing_if_available=args.load_all,
+			model_dir=args.model_dir,
+			jobs=args.jobs,
+		)
 		for dataset in datasets:
 			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
 			per_rows = [r for r in rows if r.get("dataset") == dataset]
@@ -223,20 +261,17 @@ def main() -> None:
 			print(f"Saved results to: {per_dataset_path}")
 
 	elif args.mode in ("predict", "forecast"):
-		rows = []
-		for dataset in datasets:
-			rows.extend(
-				run_predict_suite(
-					dataset_name=dataset,
-					data_dir=args.data_dir,
-					benchmark_names=benchmark_names,
-					include_tsf=not args.no_tsf,
-					random_state=args.seed,
-					n_estimators_tsf=args.n_estimators,
-					model_dir=args.model_dir,
-					predictions_dir=args.predictions_dir,
-				)
-			)
+		rows = run_predict_on_datasets(
+			datasets=datasets,
+			data_dir=args.data_dir,
+			benchmark_names=benchmark_names,
+			include_tsf=not args.no_tsf,
+			random_state=args.seed,
+			n_estimators_tsf=args.n_estimators,
+			model_dir=args.model_dir,
+			predictions_dir=args.predictions_dir,
+			jobs=args.jobs,
+		)
 		for dataset in datasets:
 			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
 			per_rows = [r for r in rows if r.get("dataset") == dataset]

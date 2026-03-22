@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,predictions_path
+ItalyPowerDemand,TSF (ours),0.9582118561710399,0.0,4.8835234000580385,ok,,results\predictions\ItalyPowerDemand\TSF__ours_.csv
+ItalyPowerDemand,1NN-DTW,0.9504373177842566,0.0,0.5816344999475405,ok,,results\predictions\ItalyPowerDemand\1NN-DTW.csv
+ItalyPowerDemand,1NN-ED,0.9552964042759962,0.0,0.008479999960400164,ok,,results\predictions\ItalyPowerDemand\1NN-ED.csv
+ItalyPowerDemand,BOSS-ensemble,0.9271137026239067,0.0,1.0835610999492928,ok,,results\predictions\ItalyPowerDemand\BOSS-ensemble.csv
+ItalyPowerDemand,Rocket,0.9698736637512148,0.0,2.0206993999890983,ok,,results\predictions\ItalyPowerDemand\Rocket.csv

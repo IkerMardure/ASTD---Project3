@@ -50,7 +50,8 @@ python experiments/main_run.py \
   --seed 7 \
   --n-train 100 \
   --n-test 40 \
-  --n-timestamps 120
+  --n-timestamps 120 \
+  --jobs 4
 ```
 
 > **Note:** When running on multiple datasets, output CSVs are now named per dataset to avoid overwriting. You can also use `{dataset}` in `--output-csv` to explicitly control where each dataset’s results go.
@@ -91,6 +92,29 @@ python experiments/main_run.py --mode forecast --datasets ItalyPowerDemand
 ```bash
 python experiments/main_run.py
 ```
+
+### Entrenamiento completo (todos los datasets + todas las técnicas)
+
+Con este comando, se entrenan todos los clasificadores de benchmark y TSF, y se guardan modelos y CSV de resultados para cada dataset.
+
+```bash
+python experiments/main_run.py \
+  --mode train \
+  --datasets ItalyPowerDemand,GunPoint,ECG5000,InlineSkate,ElectricDevices \
+  --tsf-config experiments/TSF_best_params.json \
+  --load-all \
+  --model-dir trained_models \
+  --output-csv results/benchmark_comparison.csv \
+  --predictions-dir results/predictions \
+  --seed 42 \
+  --jobs 4
+```
+
+Notas:
+- `--load-all` evita prompts ya existentes y carga modelos existentes cuando estén presentes.
+- La opción `--tsf-config` aplica `n_estimators` y `min_interval_length` específicos por dataset.
+- Para ejecutar de nuevo desde cero, borra `trained_models/` antes o utiliza un directorio nuevo.
+
 
 ---
 
