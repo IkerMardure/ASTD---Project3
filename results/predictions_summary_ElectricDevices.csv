@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,predictions_path
+ElectricDevices,TSF (ours),0.6974452081442095,0.0,28.69184649991803,ok,,results\predictions\ElectricDevices\TSF__ours_.csv
+ElectricDevices,1NN-DTW,0.5970691220334587,0.0,9756.395849599969,ok,,results\predictions\ElectricDevices\1NN-DTW.csv
+ElectricDevices,1NN-ED,0.5492154065620543,0.0,4.782354100025259,ok,,results\predictions\ElectricDevices\1NN-ED.csv
+ElectricDevices,BOSS-ensemble,0.7178057320710673,0.0,154.3355497000739,ok,,results\predictions\ElectricDevices\BOSS-ensemble.csv
+ElectricDevices,Rocket,0.7259758786149656,0.0,42.07503860001452,ok,,results\predictions\ElectricDevices\Rocket.csv

@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error,model_path
+ElectricDevices,TSF (ours),0.6974452081442095,0.0,45.40527480002493,ok,,
+ElectricDevices,1NN-DTW,0.5970691220334587,0.0,11313.699615400052,ok,,
+ElectricDevices,1NN-ED,0.5492154065620543,0.0881164000602439,5.181891200016253,ok,,trained_models\ElectricDevices\1NN-ED.joblib
+ElectricDevices,BOSS-ensemble,0.7178057320710673,5004.91554289998,187.66560700000264,ok,,trained_models\ElectricDevices\BOSS-ensemble.joblib
+ElectricDevices,Rocket,0.7259758786149656,177.54919259995222,57.47424140002113,ok,,trained_models\ElectricDevices\Rocket.joblib

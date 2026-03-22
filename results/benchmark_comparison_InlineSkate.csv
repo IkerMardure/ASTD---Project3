@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error
+InlineSkate,TSF (ours),0.3690909090909091,0.0,23.279340100008994,ok,
+InlineSkate,1NN-DTW,0.3836363636363636,0.0,3644.362657599966,ok,
+InlineSkate,1NN-ED,0.3418181818181818,0.0,0.0988385999808088,ok,
+InlineSkate,BOSS-ensemble,0.46545454545454545,0.0,9.805871400050819,ok,
+InlineSkate,Rocket,0.4709090909090909,0.0,74.02147100004368,ok,

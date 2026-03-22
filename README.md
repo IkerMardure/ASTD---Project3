@@ -2,61 +2,148 @@
 
 A small Python project for experimenting with time series classification using **aeon**.
 
-## ✅ What’s included
+## ✅ Project Structure
 
-- `classifiers/tsf_classifier.py`: A lightweight wrapper around `aeon.classification.interval_based.TimeSeriesForestClassifier`.
-- `data/download_ucr_datasets.py`: Download selected UCR benchmark datasets.
-- `experiments/main_run.py`: Entry-point for running experiments (synthetic and real data).
-- `results/`: Intended for storing plots, tables, and analysis outputs.
+- `classifiers/tsf_classifier.py`: Wrapper around aeon's `TimeSeriesForestClassifier` for consistent project usage.
+- `classifiers/benchmarks/*.py`: Benchmark classifier specs (1NN-DTW, 1NN-ED, BOSS, Rocket, Shapelet, Catch22).
+- `data/`: UCR dataset folders (raw `.ts`, `.txt`, `.arff`).
+- `experiments/main_run.py`: Main orchestrator for training/eval/prediction across datasets.
+- `experiments/validation.py`: Utilities for dataset I/O, model fit/predict/metrics, and save/load.
+- `results/`: Output folder for results tables and predictions.
+- `utils/dashboard/generate_dashboard.py`: Dash app to inspect results interactively.
 
 ---
 
-## 🚀 Quick start
+## 🚀 Quickstart
 
 ### 1) Install dependencies
-
-From the repo root:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2) Run a quick experiment
+### 2) Run default benchmark
 
 ```bash
 python experiments/main_run.py
 ```
 
-Optional parameters (example):
+This runs the default benchmark mode on `ItalyPowerDemand` (as set in code) and writes result CSVs.
 
-```bash
-python experiments/main_run.py --n-train 100 --n-test 40 --n-timestamps 120 --n-estimators 300 --seed 7
-```
+---
 
-### Full CLI example (all available arguments)
+## 🧪 CLI usage (`experiments/main_run.py`)
 
-The following command shows how to invoke `main_run.py` with every supported argument.
+`main_run.py` supports modes: `benchmarks`, `train`, `predict`, `forecast`, `synthetic`.
+
+### Common options
+
+- `--mode [benchmarks|train|predict|forecast|synthetic]` (default: `benchmarks`)
+- `--datasets` (comma-separated dataset names under `data/`)
+- `--benchmarks` (comma-separated subset of benchmark names)
+- `--data-dir`, `--model-dir`, `--predictions-dir`, `--output-csv`
+- `--load-all` (train mode: auto-load existing models instead of prompt)
+- `--no-tsf` (skip TSF model)
+- `--jobs` dataset-level parallelism (`1` = serial)
+- `--tsf-config` path to per-dataset TSF config JSON (n_estimators/min_interval_length)
+
+### Example: Full data run (train + save)
 
 ```bash
 python experiments/main_run.py \
   --mode train \
   --datasets ItalyPowerDemand,GunPoint,ECG5000,InlineSkate,ElectricDevices \
-  --benchmarks "1NN-DTW,1NN-ED,BOSS-ensemble,Rocket" \
-  --data-dir data \
-  --output-csv results/benchmark_comparison.csv \
+  --benchmarks 1NN-DTW,1NN-ED,BOSS-ensemble,Rocket \
+  --tsf-config experiments/TSF_best_params.json \
+  --load-all \
   --model-dir trained_models \
+  --output-csv results/benchmark_comparison.csv \
   --predictions-dir results/predictions \
-  --n-estimators 300 \
-  --seed 7 \
-  --n-train 100 \
-  --n-test 40 \
-  --n-timestamps 120 \
+  --seed 42 \
   --jobs 4
 ```
 
-> **Note:** When running on multiple datasets, output CSVs are now named per dataset to avoid overwriting. You can also use `{dataset}` in `--output-csv` to explicitly control where each dataset’s results go.
+### Example: Predict with existing models
+
+```bash
+python experiments/main_run.py \
+  --mode predict \
+  --datasets ItalyPowerDemand,GunPoint,ECG5000,InlineSkate,ElectricDevices \
+  --benchmarks 1NN-DTW,1NN-ED,BOSS-ensemble,Rocket \
+  --model-dir trained_models \
+  --predictions-dir results/predictions \
+  --output-csv results/predictions_summary.csv \
+  --jobs 4
+```
 
 ---
+
+## 📝 Output conventions
+
+- In **train**/benchmark flows, results are written to CSV by dataset:
+  - `results/benchmark_comparison_<dataset>.csv`
+- `predictions` folder contains per-sample outputs:
+  - `results/predictions/<dataset>/<classifier>.csv`
+- `predictions_summary_<dataset>.csv` tracks benchmark metrics per dataset.
+
+`fit_time_s` is reported as training duration. If you use `--load-all` and model exists, `fit_time_s` is `0` because loaded model is not re-trained.
+
+---
+
+## 📊 Dashboard support
+
+`utils/dashboard/generate_dashboard.py` now accepts patterns and multiple CSV files:
+
+```bash
+python utils/dashboard/generate_dashboard.py \
+  --results 'results/benchmark_comparison_*.csv' \
+  --data-dir data \
+  --hp-dir results \
+  --predictions-dir results/predictions \
+  --viz-dir visualization \
+  --host 127.0.0.1 --port 8050 --debug
+```
+
+It scans matches, concatenates all results, and provides cross-dataset metrics/time plotting.
+
+---
+
+## 📌 TSF per-dataset config
+
+`experiments/TSF_best_params.json` stores TSF parameters by dataset:
+
+```json
+{
+  "ECG5000": {"n_estimators": 1, "min_interval_length": 1},
+  "ElectricDevices": {"n_estimators": 300, "min_interval_length": 3},
+  "GunPoint": {"n_estimators": 100, "min_interval_length": 3},
+  "InlineSkate": {"n_estimators": 200, "min_interval_length": 3},
+  "ItalyPowerDemand": {"n_estimators": 300, "min_interval_length": 5}
+}
+```
+
+---
+
+## 🧪 1NN-DTW / 1NN-ED parallelization
+
+- `classifiers/benchmarks/one_nn_dtw.py` now uses `n_jobs=-1`.
+- `classifiers/benchmarks/one_nn_ed.py` now uses `n_jobs=-1`.
+
+This allows euclidean/dtw nearest-neighbor evaluation parallel in new versions of aeon.
+
+---
+
+## 🧩 Notes on data organization
+
+- UCR datasets available in `data/<dataset>`
+- `assets/dashboard.css` for optional dashboard theme
+- `utils/visualize_*` for more plotting
+
+---
+
+## ⚡ Quick failsafe
+
+If you hit `FileNotFoundError` for `results/benchmark_comparison.csv`, run with the updated glob/pattern as above since benchmark-by-dataset output is now the default.
 
 ## 🧠 `main_run.py` modes (what each one does)
 

@@ -78,10 +78,22 @@ def _load_ucr_stats(data_dir: Path, dataset_name: str) -> dict[str, int]:
     }
 
 
-def collect_results(results_csv: Path, data_dir: Path) -> dict[str, Any]:
-    df = pd.read_csv(results_csv)
+def collect_results_from_files(results_csv_files: list[Path], data_dir: Path) -> dict[str, Any]:
+    df_list = []
+    for p in results_csv_files:
+        if not p.exists():
+            continue
+        try:
+            df_cur = pd.read_csv(p)
+            df_list.append(df_cur)
+        except Exception as exc:
+            print(f"Warning: failed to read CSV {p}: {exc}")  # still continue
+    if not df_list:
+        raise FileNotFoundError(f"No results CSV files found in {results_csv_files}")
+
+    df = pd.concat(df_list, ignore_index=True)
     if df.empty:
-        raise ValueError(f"Results file '{results_csv}' is empty")
+        raise ValueError("Combined results files are empty")
 
     datasets = sorted(df["dataset"].unique())
     dataset_stats = []
@@ -667,13 +679,13 @@ def collect_dataset_labels(data_dir: Path, dataset_name: str) -> list[Any]:
 
 
 def create_dash_app(
-    results_csv: Path,
+    results_csv_paths: list[Path],
     data_dir: Path,
     hp_dir: Path,
     predictions_dir: Path,
     viz_dir: Path,
 ):
-    payload = collect_results(results_csv, data_dir)
+    payload = collect_results_from_files(results_csv_paths, data_dir)
     hp_results = collect_hyperparameter_results(hp_dir)
     metrics_conclusion = build_global_metrics_conclusion(payload)
     timing_conclusion = build_global_timing_conclusion(payload)
@@ -966,7 +978,7 @@ def create_dash_app(
 
 def main():
     parser = argparse.ArgumentParser(description="Run Dash dashboard server")
-    parser.add_argument("--results", default="results/benchmark_comparison.csv")
+    parser.add_argument("--results", default="results/benchmark_comparison_*.csv")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--hp-dir", default="results")
     parser.add_argument("--predictions-dir", default="results/predictions")
@@ -976,8 +988,19 @@ def main():
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
+    results_path = Path(args.results)
+    if results_path.is_file():
+        results_files = [results_path]
+    elif results_path.is_dir():
+        results_files = sorted(results_path.glob("*.csv"))
+    else:
+        results_files = sorted(Path().glob(args.results))
+
+    if not results_files:
+        raise FileNotFoundError(f"No results CSV files found for pattern: {args.results}")
+
     app = create_dash_app(
-        Path(args.results),
+        results_files,
         Path(args.data_dir),
         Path(args.hp_dir),
         Path(args.predictions_dir),

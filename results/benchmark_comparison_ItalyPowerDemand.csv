@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error
+ItalyPowerDemand,TSF (ours),0.9582118561710399,0.0,10.762857699999586,ok,
+ItalyPowerDemand,1NN-DTW,0.9504373177842566,0.0,1.5100567999761552,ok,
+ItalyPowerDemand,1NN-ED,0.9552964042759962,0.0,0.05471459997352213,ok,
+ItalyPowerDemand,BOSS-ensemble,0.9271137026239067,0.0,2.1641618000576273,ok,
+ItalyPowerDemand,Rocket,0.9698736637512148,0.0,2.498198099900037,ok,

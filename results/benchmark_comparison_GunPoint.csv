@@ -1,0 +1,6 @@
+dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error
+GunPoint,TSF (ours),0.9666666666666667,0.0,3.348439499968663,ok,
+GunPoint,1NN-DTW,0.9066666666666666,0.0,3.9954062000615522,ok,
+GunPoint,1NN-ED,0.9133333333333333,0.0,0.04555499996058643,ok,
+GunPoint,BOSS-ensemble,1.0,0.0,4.588931500096805,ok,
+GunPoint,Rocket,1.0,0.0,2.0779921000357717,ok,
