@@ -8,6 +8,6 @@ from classifiers.benchmarks.spec import BenchmarkSpec
 SPEC = BenchmarkSpec(
     name="RISE",
     module="aeon.classification.interval_based",
-    class_name="RandomIntervalSpectralEnsemble",
+    class_name="RandomIntervalSpectralEnsembleClassifier",
     kwargs={},
 )

@@ -1,2 +1,2 @@
 reference_classifier,classifier,metric,n_pairs,reference_mean,candidate_mean,mean_delta,median_delta,reference_better_count,candidate_better_count,ties_count,alpha,significant,wilcoxon_stat,p_value,status,error
-TSF (ours),Rocket,f1_weighted,1,0.9620991969540617,0.9698736637512148,-0.007774466797153101,-0.007774466797153101,0,1,0,0.05,False,0.0,1.0,ok,
+TSF (ours),RISE,f1_weighted,1,0.9620991969540617,0.9572393119591681,0.004859884994893537,0.004859884994893537,1,0,0,0.05,False,0.0,1.0,ok,
