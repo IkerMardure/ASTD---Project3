@@ -299,11 +299,16 @@ def run_benchmark_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	model_dir: str | Path | None = None,
+	predictions_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
 	"""Run the default benchmark suite on one dataset.
 
 	If a model cannot be instantiated or trained due to missing optional
 	dependencies, the error is captured and included in the results.
+	
+	If `model_dir` is provided, trained models are saved.
+	If `predictions_dir` is provided, per-instance predictions are saved.
 	"""
 	print(f"\n=== Dataset: {dataset_name} ({len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers) ===", flush=True)
 	print(f"  Loading data...", flush=True)
@@ -325,6 +330,8 @@ def run_benchmark_suite(
 					random_state=random_state,
 				)
 			)
+			model_path = _model_path(Path(model_dir), dataset_name, "TSF (ours)") if model_dir else None
+			predictions_path = _predictions_path(Path(predictions_dir), dataset_name, "TSF (ours)") if predictions_dir else None
 			rows.append(
 				_evaluate_model(
 					model=tsfc,
@@ -334,6 +341,8 @@ def run_benchmark_suite(
 					y_train=y_train,
 					X_test=X_test,
 					y_test=y_test,
+					model_path=model_path,
+					predictions_path=predictions_path,
 				)
 			)
 		except Exception as exc:
@@ -343,6 +352,8 @@ def run_benchmark_suite(
 	for spec in selected_specs:
 		try:
 			model = instantiate_benchmark(spec=spec, random_state=random_state)
+			model_path = _model_path(Path(model_dir), dataset_name, spec.name) if model_dir else None
+			predictions_path = _predictions_path(Path(predictions_dir), dataset_name, spec.name) if predictions_dir else None
 			rows.append(
 				_evaluate_model(
 					model=model,
@@ -352,6 +363,8 @@ def run_benchmark_suite(
 					y_train=y_train,
 					X_test=X_test,
 					y_test=y_test,
+					model_path=model_path,
+					predictions_path=predictions_path,
 				)
 			)
 		except Exception as exc:
@@ -658,6 +671,8 @@ def run_benchmarks_on_datasets(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	model_dir: str | Path | None = None,
+	predictions_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
 	"""Run benchmark suite across multiple datasets."""
 	print(f"Starting benchmark run: {len(datasets)} dataset(s) × up to {len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers", flush=True)
@@ -671,6 +686,8 @@ def run_benchmarks_on_datasets(
 			include_tsf=include_tsf,
 			random_state=random_state,
 			n_estimators_tsf=n_estimators_tsf,
+			model_dir=model_dir,
+			predictions_dir=predictions_dir,
 		)
 		all_rows.extend(rows)
 	return all_rows

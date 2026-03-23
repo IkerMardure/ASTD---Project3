@@ -183,6 +183,8 @@ def main() -> None:
 			include_tsf=not args.no_tsf,
 			random_state=args.seed,
 			n_estimators_tsf=args.n_estimators,
+			model_dir=args.model_dir,
+			predictions_dir=args.predictions_dir,
 		)
 
 		print(format_results_table(rows))
