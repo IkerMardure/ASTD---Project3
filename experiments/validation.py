@@ -13,6 +13,8 @@ from typing import Any
 
 import joblib
 import numpy as np
+from scipy.stats import wilcoxon
+from sklearn.metrics import balanced_accuracy_score, f1_score, precision_score, recall_score
 
 from classifiers.benchmarks.suite import (
 	DEFAULT_BENCHMARK_SPECS,
@@ -39,6 +41,43 @@ def _sanitize_filename(name: str) -> str:
 
 def _ensure_dir(path: Path) -> None:
 	path.mkdir(parents=True, exist_ok=True)
+
+
+def _compute_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+	"""Compute classification metrics used in benchmark result rows."""
+	y_true_arr = np.asarray(y_true)
+	y_pred_arr = np.asarray(y_pred)
+
+	return {
+		"accuracy": float(np.mean(y_pred_arr == y_true_arr)),
+		"precision_weighted": float(
+			precision_score(y_true_arr, y_pred_arr, average="weighted", zero_division=0)
+		),
+		"recall_weighted": float(
+			recall_score(y_true_arr, y_pred_arr, average="weighted", zero_division=0)
+		),
+		"f1_weighted": float(
+			f1_score(y_true_arr, y_pred_arr, average="weighted", zero_division=0)
+		),
+		"balanced_accuracy": float(balanced_accuracy_score(y_true_arr, y_pred_arr)),
+	}
+
+
+def _error_result_row(dataset_name: str, classifier_name: str, exc: Exception) -> dict[str, Any]:
+	"""Build a standardized error row for failed evaluations."""
+	return {
+		"dataset": dataset_name,
+		"classifier": classifier_name,
+		"accuracy": np.nan,
+		"precision_weighted": np.nan,
+		"recall_weighted": np.nan,
+		"f1_weighted": np.nan,
+		"balanced_accuracy": np.nan,
+		"fit_time_s": np.nan,
+		"predict_time_s": np.nan,
+		"status": "error",
+		"error": f"{type(exc).__name__}: {exc}",
+	}
 
 
 def _prompt_load_or_retrain(model_path: Path, allow_load_all: bool = True) -> str:
@@ -194,13 +233,14 @@ def _evaluate_model(
 		save_predictions(y_test, y_pred, predictions_path)
 		print(f"  [{dataset_name}] {model_name} — saved predictions to {predictions_path}", flush=True)
 
-	accuracy = float(np.mean(np.asarray(y_pred) == np.asarray(y_test)))
+	metrics = _compute_classification_metrics(y_test, y_pred)
+	accuracy = metrics["accuracy"]
 	print(f"  [{dataset_name}] {model_name} — accuracy={accuracy:.4f}, predict={predict_time_s:.1f}s", flush=True)
 
 	row: dict[str, Any] = {
 		"dataset": dataset_name,
 		"classifier": model_name,
-		"accuracy": accuracy,
+		**metrics,
 		"fit_time_s": fit_time_s,
 		"predict_time_s": predict_time_s,
 		"status": "ok",
@@ -234,13 +274,14 @@ def _evaluate_loaded_model(
 		save_predictions(y_test, y_pred, predictions_path)
 		print(f"  [{dataset_name}] {model_name} — saved predictions to {predictions_path}", flush=True)
 
-	accuracy = float(np.mean(np.asarray(y_pred) == np.asarray(y_test)))
+	metrics = _compute_classification_metrics(y_test, y_pred)
+	accuracy = metrics["accuracy"]
 	print(f"  [{dataset_name}] {model_name} — accuracy={accuracy:.4f}, predict={predict_time_s:.1f}s", flush=True)
 
 	row: dict[str, Any] = {
 		"dataset": dataset_name,
 		"classifier": model_name,
-		"accuracy": accuracy,
+		**metrics,
 		"fit_time_s": 0.0,
 		"predict_time_s": predict_time_s,
 		"status": "ok",
@@ -297,17 +338,7 @@ def run_benchmark_suite(
 			)
 		except Exception as exc:
 			print(f"  [{dataset_name}] TSF (ours) — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": "TSF (ours)",
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+			rows.append(_error_result_row(dataset_name, "TSF (ours)", exc))
 
 	for spec in selected_specs:
 		try:
@@ -325,17 +356,7 @@ def run_benchmark_suite(
 			)
 		except Exception as exc:
 			print(f"  [{dataset_name}] {spec.name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": spec.name,
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+			rows.append(_error_result_row(dataset_name, spec.name, exc))
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
@@ -395,17 +416,7 @@ def run_train_suite(
 				)
 			except Exception as exc:
 				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-				rows.append(
-					{
-						"dataset": dataset_name,
-						"classifier": model_name,
-						"accuracy": np.nan,
-						"fit_time_s": np.nan,
-						"predict_time_s": np.nan,
-						"status": "error",
-						"error": f"{type(exc).__name__}: {exc}",
-					}
-				)
+				rows.append(_error_result_row(dataset_name, model_name, exc))
 			handled = True
 
 		elif model_path.exists() and ask_on_existing_model:
@@ -428,17 +439,7 @@ def run_train_suite(
 					)
 				except Exception as exc:
 					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-					rows.append(
-						{
-							"dataset": dataset_name,
-							"classifier": model_name,
-							"accuracy": np.nan,
-							"fit_time_s": np.nan,
-							"predict_time_s": np.nan,
-							"status": "error",
-							"error": f"{type(exc).__name__}: {exc}",
-						}
-					)
+					rows.append(_error_result_row(dataset_name, model_name, exc))
 				handled = True
 			elif action == "retrain":
 				try:
@@ -463,17 +464,7 @@ def run_train_suite(
 					)
 				except Exception as exc:
 					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-					rows.append(
-						{
-							"dataset": dataset_name,
-							"classifier": model_name,
-							"accuracy": np.nan,
-							"fit_time_s": np.nan,
-							"predict_time_s": np.nan,
-							"status": "error",
-							"error": f"{type(exc).__name__}: {exc}",
-						}
-					)
+					rows.append(_error_result_row(dataset_name, model_name, exc))
 				handled = True
 
 		if not handled:
@@ -498,17 +489,7 @@ def run_train_suite(
 				)
 			except Exception as exc:
 				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-				rows.append(
-					{
-						"dataset": dataset_name,
-						"classifier": model_name,
-						"accuracy": np.nan,
-						"fit_time_s": np.nan,
-						"predict_time_s": np.nan,
-						"status": "error",
-						"error": f"{type(exc).__name__}: {exc}",
-					}
-				)
+				rows.append(_error_result_row(dataset_name, model_name, exc))
 
 	# === Benchmark classifiers ===
 	for spec in selected_specs:
@@ -530,17 +511,7 @@ def run_train_suite(
 				)
 			except Exception as exc:
 				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-				rows.append(
-					{
-						"dataset": dataset_name,
-						"classifier": model_name,
-						"accuracy": np.nan,
-						"fit_time_s": np.nan,
-						"predict_time_s": np.nan,
-						"status": "error",
-						"error": f"{type(exc).__name__}: {exc}",
-					}
-				)
+				rows.append(_error_result_row(dataset_name, model_name, exc))
 			handled = True
 
 		elif model_path.exists() and ask_on_existing_model:
@@ -563,17 +534,7 @@ def run_train_suite(
 					)
 				except Exception as exc:
 					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-					rows.append(
-						{
-							"dataset": dataset_name,
-							"classifier": model_name,
-							"accuracy": np.nan,
-							"fit_time_s": np.nan,
-							"predict_time_s": np.nan,
-							"status": "error",
-							"error": f"{type(exc).__name__}: {exc}",
-						}
-					)
+					rows.append(_error_result_row(dataset_name, model_name, exc))
 				handled = True
 			elif action == "retrain":
 				try:
@@ -593,17 +554,7 @@ def run_train_suite(
 					)
 				except Exception as exc:
 					print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-					rows.append(
-						{
-							"dataset": dataset_name,
-							"classifier": model_name,
-							"accuracy": np.nan,
-							"fit_time_s": np.nan,
-							"predict_time_s": np.nan,
-							"status": "error",
-							"error": f"{type(exc).__name__}: {exc}",
-						}
-					)
+					rows.append(_error_result_row(dataset_name, model_name, exc))
 				handled = True
 
 		if not handled:
@@ -623,17 +574,7 @@ def run_train_suite(
 				)
 			except Exception as exc:
 				print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-				rows.append(
-					{
-						"dataset": dataset_name,
-						"classifier": model_name,
-						"accuracy": np.nan,
-						"fit_time_s": np.nan,
-						"predict_time_s": np.nan,
-						"status": "error",
-						"error": f"{type(exc).__name__}: {exc}",
-					}
-				)
+				rows.append(_error_result_row(dataset_name, model_name, exc))
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
@@ -680,17 +621,7 @@ def run_predict_suite(
 			)
 		except Exception as exc:
 			print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": model_name,
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+			rows.append(_error_result_row(dataset_name, model_name, exc))
 
 	for spec in selected_specs:
 		model_name = spec.name
@@ -710,17 +641,7 @@ def run_predict_suite(
 			)
 		except Exception as exc:
 			print(f"  [{dataset_name}] {model_name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(
-				{
-					"dataset": dataset_name,
-					"classifier": model_name,
-					"accuracy": np.nan,
-					"fit_time_s": np.nan,
-					"predict_time_s": np.nan,
-					"status": "error",
-					"error": f"{type(exc).__name__}: {exc}",
-				}
-			)
+			rows.append(_error_result_row(dataset_name, model_name, exc))
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
@@ -764,7 +685,19 @@ def save_results_csv(rows: list[dict[str, Any]], output_path: str | Path) -> Pat
 	path = Path(output_path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 
-	base_fields = ["dataset", "classifier", "accuracy", "fit_time_s", "predict_time_s", "status", "error"]
+	base_fields = [
+		"dataset",
+		"classifier",
+		"accuracy",
+		"precision_weighted",
+		"recall_weighted",
+		"f1_weighted",
+		"balanced_accuracy",
+		"fit_time_s",
+		"predict_time_s",
+		"status",
+		"error",
+	]
 	extra_fields = sorted(
 		{k for row in rows for k in row.keys() if k not in base_fields}
 	)
@@ -783,18 +716,218 @@ def format_results_table(rows: list[dict[str, Any]]) -> str:
 	if not rows:
 		return "No results."
 
-	headers = ["dataset", "classifier", "accuracy", "fit_time_s", "predict_time_s", "status"]
+	headers = [
+		"dataset",
+		"classifier",
+		"accuracy",
+		"f1_weighted",
+		"balanced_accuracy",
+		"fit_time_s",
+		"predict_time_s",
+		"status",
+	]
 	col_widths: dict[str, int] = {}
 	for header in headers:
 		max_cell_len = max(len(str(row.get(header, ""))) for row in rows)
 		col_widths[header] = max(len(header), max_cell_len)
 
 	def _fmt_cell(header: str, value: Any) -> str:
-		if header in {"accuracy", "fit_time_s", "predict_time_s"} and isinstance(value, (float, np.floating)):
+		if header in {"accuracy", "f1_weighted", "balanced_accuracy", "fit_time_s", "predict_time_s"} and isinstance(value, (float, np.floating)):
 			if np.isnan(value):
 				return "nan"
 			return f"{value:.4f}"
 		return str(value)
+
+	line = " | ".join(header.ljust(col_widths[header]) for header in headers)
+	sep = "-+-".join("-" * col_widths[header] for header in headers)
+	data_lines = []
+	for row in rows:
+		formatted = []
+		for header in headers:
+			formatted.append(_fmt_cell(header, row.get(header, "")).ljust(col_widths[header]))
+		data_lines.append(" | ".join(formatted))
+
+	return "\n".join([line, sep, *data_lines])
+
+
+def compute_wilcoxon_vs_reference(
+	rows: list[dict[str, Any]],
+	reference_classifier: str = "TSF (ours)",
+	metric: str = "accuracy",
+	alpha: float = 0.05,
+) -> list[dict[str, Any]]:
+	"""Compute paired Wilcoxon tests versus a reference classifier across datasets."""
+	if not rows:
+		return []
+
+	# Keep one metric value per (dataset, classifier) and only successful runs.
+	values: dict[tuple[str, str], float] = {}
+	for row in rows:
+		if row.get("status") != "ok":
+			continue
+		dataset = row.get("dataset")
+		classifier = row.get("classifier")
+		value = row.get(metric)
+		if dataset is None or classifier is None:
+			continue
+		if not isinstance(value, (int, float, np.floating)):
+			continue
+		value_float = float(value)
+		if np.isnan(value_float):
+			continue
+		values[(str(dataset), str(classifier))] = value_float
+
+	datasets = sorted({dataset for dataset, _ in values.keys()})
+	classifiers = sorted({classifier for _, classifier in values.keys() if classifier != reference_classifier})
+
+	results: list[dict[str, Any]] = []
+	for classifier in classifiers:
+		reference_scores: list[float] = []
+		candidate_scores: list[float] = []
+		for dataset in datasets:
+			ref_key = (dataset, reference_classifier)
+			cmp_key = (dataset, classifier)
+			if ref_key in values and cmp_key in values:
+				reference_scores.append(values[ref_key])
+				candidate_scores.append(values[cmp_key])
+
+		if not reference_scores:
+			continue
+
+		ref_arr = np.asarray(reference_scores, dtype=float)
+		cmp_arr = np.asarray(candidate_scores, dtype=float)
+		delta_arr = ref_arr - cmp_arr
+
+		better = int(np.sum(delta_arr > 0))
+		worse = int(np.sum(delta_arr < 0))
+		ties = int(np.sum(delta_arr == 0))
+
+		row_result: dict[str, Any] = {
+			"reference_classifier": reference_classifier,
+			"classifier": classifier,
+			"metric": metric,
+			"n_pairs": int(ref_arr.size),
+			"reference_mean": float(np.mean(ref_arr)),
+			"candidate_mean": float(np.mean(cmp_arr)),
+			"mean_delta": float(np.mean(delta_arr)),
+			"median_delta": float(np.median(delta_arr)),
+			"reference_better_count": better,
+			"candidate_better_count": worse,
+			"ties_count": ties,
+			"alpha": alpha,
+			"significant": False,
+			"wilcoxon_stat": np.nan,
+			"p_value": np.nan,
+			"status": "ok",
+			"error": "",
+		}
+
+		if np.all(delta_arr == 0.0):
+			row_result["status"] = "all_ties"
+			results.append(row_result)
+			continue
+
+		try:
+			stat, p_value = wilcoxon(ref_arr, cmp_arr, alternative="two-sided")
+			row_result["wilcoxon_stat"] = float(stat)
+			row_result["p_value"] = float(p_value)
+			row_result["significant"] = bool(p_value < alpha)
+		except ValueError as exc:
+			row_result["status"] = "error"
+			row_result["error"] = f"{type(exc).__name__}: {exc}"
+
+		results.append(row_result)
+
+	return results
+
+
+def save_wilcoxon_csv(rows: list[dict[str, Any]], output_path: str | Path) -> Path:
+	"""Save Wilcoxon comparison rows to CSV."""
+	path = Path(output_path)
+	path.parent.mkdir(parents=True, exist_ok=True)
+
+	if not rows:
+		with path.open("w", newline="", encoding="utf-8") as handle:
+			writer = csv.writer(handle)
+			writer.writerow(
+				[
+					"reference_classifier",
+					"classifier",
+					"metric",
+					"n_pairs",
+					"reference_mean",
+					"candidate_mean",
+					"mean_delta",
+					"median_delta",
+					"reference_better_count",
+					"candidate_better_count",
+					"ties_count",
+					"alpha",
+					"significant",
+					"wilcoxon_stat",
+					"p_value",
+					"status",
+					"error",
+				]
+			)
+		return path
+
+	fieldnames = [
+		"reference_classifier",
+		"classifier",
+		"metric",
+		"n_pairs",
+		"reference_mean",
+		"candidate_mean",
+		"mean_delta",
+		"median_delta",
+		"reference_better_count",
+		"candidate_better_count",
+		"ties_count",
+		"alpha",
+		"significant",
+		"wilcoxon_stat",
+		"p_value",
+		"status",
+		"error",
+	]
+
+	with path.open("w", newline="", encoding="utf-8") as handle:
+		writer = csv.DictWriter(handle, fieldnames=fieldnames)
+		writer.writeheader()
+		writer.writerows(rows)
+
+	return path
+
+
+def format_wilcoxon_table(rows: list[dict[str, Any]]) -> str:
+	"""Create a compact plain-text Wilcoxon summary table."""
+	if not rows:
+		return "No Wilcoxon results."
+
+	headers = [
+		"classifier",
+		"n_pairs",
+		"mean_delta",
+		"p_value",
+		"significant",
+		"reference_better_count",
+		"candidate_better_count",
+		"ties_count",
+		"status",
+	]
+
+	def _fmt_cell(header: str, value: Any) -> str:
+		if header in {"mean_delta", "p_value"} and isinstance(value, (float, np.floating)):
+			if np.isnan(value):
+				return "nan"
+			return f"{value:.4f}"
+		return str(value)
+
+	col_widths: dict[str, int] = {}
+	for header in headers:
+		max_cell_len = max(len(_fmt_cell(header, row.get(header, ""))) for row in rows)
+		col_widths[header] = max(len(header), max_cell_len)
 
 	line = " | ".join(header.ljust(col_widths[header]) for header in headers)
 	sep = "-+-".join("-" * col_widths[header] for header in headers)

@@ -20,6 +20,8 @@ if str(ROOT) not in sys.path:
 from classifiers.tsf_classifier import AeonTSFClassifier, TSFConfig
 from classifiers.benchmarks.suite import DEFAULT_BENCHMARK_SPECS
 from experiments.validation import (
+	compute_wilcoxon_vs_reference,
+	format_wilcoxon_table,
 	format_results_table,
 	run_benchmarks_on_datasets,
 	run_train_suite,
@@ -27,6 +29,7 @@ from experiments.validation import (
 	# Keep old name for backward compatibility
 	run_forecast_suite,
 	save_results_csv,
+	save_wilcoxon_csv,
 )
 
 
@@ -183,6 +186,15 @@ def main() -> None:
 		)
 
 		print(format_results_table(rows))
+
+		if not args.no_tsf:
+			wilcoxon_rows = compute_wilcoxon_vs_reference(
+				rows=rows,
+				reference_classifier="TSF (ours)",
+				metric="f1_weighted",
+			)
+			print("\nWilcoxon test (TSF vs baselines, metric=f1_weighted):")
+			print(format_wilcoxon_table(wilcoxon_rows))
 		# Use a combined output file for all datasets (default or explicitly provided)
 		combined_output_path = (
 			args.output_csv
@@ -191,6 +203,13 @@ def main() -> None:
 		)
 		combined_output_path = save_results_csv(rows=rows, output_path=combined_output_path)
 		print(f"\nSaved combined results to: {combined_output_path}")
+
+		if not args.no_tsf:
+			wilcoxon_output_path = Path(combined_output_path).with_name(
+				f"{Path(combined_output_path).stem}_wilcoxon{Path(combined_output_path).suffix}"
+			)
+			save_wilcoxon_csv(rows=wilcoxon_rows, output_path=wilcoxon_output_path)
+			print(f"Saved Wilcoxon summary to: {wilcoxon_output_path}")
 
 		# Also save per-dataset files when multiple datasets are present
 		if len(datasets) > 1:
