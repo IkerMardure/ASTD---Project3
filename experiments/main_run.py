@@ -23,7 +23,7 @@ from experiments.validation import (
 	compute_wilcoxon_vs_reference,
 	format_wilcoxon_table,
 	format_results_table,
-	run_benchmarks_on_datasets,
+	run_benchmark_suite,
 	run_train_suite,
 	run_predict_suite,
 	# Keep old name for backward compatibility
@@ -169,23 +169,31 @@ def main() -> None:
 	datasets = _parse_csv_list(args.datasets)
 	benchmark_names = _parse_csv_list(args.benchmarks) if args.benchmarks else None
 
-	# Resolve output file naming to avoid overwriting when running with multiple datasets.
-	# If the template includes {dataset}, it will be substituted.
-	# Otherwise, when using the default output path, we insert the dataset name to keep runs separate.
-	use_dataset_in_name = len(datasets) > 1 or args.output_csv == "results/benchmark_comparison.csv"
-	output_path = _resolve_output_path(args.output_csv, datasets[0] if datasets else "", use_dataset_in_name)
+	# Always use a single CSV output file for incremental progress.
+	output_path = args.output_csv
+	if "{dataset}" in output_path:
+		output_path = _resolve_output_path(output_path, "all", False)
 
 	if args.mode == "benchmarks":
-		rows = run_benchmarks_on_datasets(
-			datasets=datasets,
-			data_dir=args.data_dir,
-			benchmark_names=benchmark_names,
-			include_tsf=not args.no_tsf,
-			random_state=args.seed,
-			n_estimators_tsf=args.n_estimators,
-			model_dir=args.model_dir,
-			predictions_dir=args.predictions_dir,
-		)
+		rows = []
+
+		# Save partial progress after each dataset so results survive mid-run failures.
+		for dataset in datasets:
+			rows.extend(
+				run_benchmark_suite(
+					dataset_name=dataset,
+					data_dir=args.data_dir,
+					benchmark_names=benchmark_names,
+					include_tsf=not args.no_tsf,
+					random_state=args.seed,
+					n_estimators_tsf=args.n_estimators,
+					model_dir=args.model_dir,
+					predictions_dir=args.predictions_dir,
+				)
+			)
+
+			save_results_csv(rows=rows, output_path=output_path)
+			print(f"Saved partial results to: {output_path}")
 
 		print(format_results_table(rows))
 
@@ -197,72 +205,55 @@ def main() -> None:
 			)
 			print("\nWilcoxon test (TSF vs baselines, metric=f1_weighted):")
 			print(format_wilcoxon_table(wilcoxon_rows))
-		# Use a combined output file for all datasets (default or explicitly provided)
-		combined_output_path = (
-			args.output_csv
-			if len(datasets) == 1
-			else _resolve_output_path(args.output_csv, "all", True)
-		)
-		combined_output_path = save_results_csv(rows=rows, output_path=combined_output_path)
-		print(f"\nSaved combined results to: {combined_output_path}")
+		# Final write (same path) to ensure the latest state is persisted.
+		output_path = save_results_csv(rows=rows, output_path=output_path)
+		print(f"\nSaved results to: {output_path}")
 
 		if not args.no_tsf:
-			wilcoxon_output_path = Path(combined_output_path).with_name(
-				f"{Path(combined_output_path).stem}_wilcoxon{Path(combined_output_path).suffix}"
+			wilcoxon_output_path = Path(output_path).with_name(
+				f"{Path(output_path).stem}_wilcoxon{Path(output_path).suffix}"
 			)
 			save_wilcoxon_csv(rows=wilcoxon_rows, output_path=wilcoxon_output_path)
 			print(f"Saved Wilcoxon summary to: {wilcoxon_output_path}")
 
-		# Also save per-dataset files when multiple datasets are present
-		if len(datasets) > 1:
-			for ds in datasets:
-				per_dataset_path = _resolve_output_path(args.output_csv, ds, True)
-				per_rows = [r for r in rows if r.get("dataset") == ds]
-				save_results_csv(rows=per_rows, output_path=per_dataset_path)
-				print(f"Saved per-dataset results to: {per_dataset_path}")
-
 	elif args.mode == "train":
 		rows = []
 		for dataset in datasets:
-			rows.extend(
-				run_train_suite(
-					dataset_name=dataset,
-					data_dir=args.data_dir,
-					benchmark_names=benchmark_names,
-					include_tsf=not args.no_tsf,
-					random_state=args.seed,
-					n_estimators_tsf=args.n_estimators,
-					ask_on_existing_model=not args.load_all,
-					load_existing_if_available=args.load_all,
-					model_dir=args.model_dir,
-				)
+			dataset_rows = run_train_suite(
+				dataset_name=dataset,
+				data_dir=args.data_dir,
+				benchmark_names=benchmark_names,
+				include_tsf=not args.no_tsf,
+				random_state=args.seed,
+				n_estimators_tsf=args.n_estimators,
+				ask_on_existing_model=not args.load_all,
+				load_existing_if_available=args.load_all,
+				model_dir=args.model_dir,
 			)
-		for dataset in datasets:
-			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
-			per_rows = [r for r in rows if r.get("dataset") == dataset]
-			save_results_csv(rows=per_rows, output_path=per_dataset_path)
-			print(f"Saved results to: {per_dataset_path}")
+			rows.extend(dataset_rows)
+
+			# Save after each dataset to preserve progress.
+			save_results_csv(rows=rows, output_path=output_path)
+			print(f"Saved partial results to: {output_path}")
 
 	elif args.mode in ("predict", "forecast"):
 		rows = []
 		for dataset in datasets:
-			rows.extend(
-				run_predict_suite(
-					dataset_name=dataset,
-					data_dir=args.data_dir,
-					benchmark_names=benchmark_names,
-					include_tsf=not args.no_tsf,
-					random_state=args.seed,
-					n_estimators_tsf=args.n_estimators,
-					model_dir=args.model_dir,
-					predictions_dir=args.predictions_dir,
-				)
+			dataset_rows = run_predict_suite(
+				dataset_name=dataset,
+				data_dir=args.data_dir,
+				benchmark_names=benchmark_names,
+				include_tsf=not args.no_tsf,
+				random_state=args.seed,
+				n_estimators_tsf=args.n_estimators,
+				model_dir=args.model_dir,
+				predictions_dir=args.predictions_dir,
 			)
-		for dataset in datasets:
-			per_dataset_path = _resolve_output_path(args.output_csv, dataset, True)
-			per_rows = [r for r in rows if r.get("dataset") == dataset]
-			save_results_csv(rows=per_rows, output_path=per_dataset_path)
-			print(f"Saved results to: {per_dataset_path}")
+			rows.extend(dataset_rows)
+
+			# Save after each dataset to preserve progress.
+			save_results_csv(rows=rows, output_path=output_path)
+			print(f"Saved partial results to: {output_path}")
 
 	else:
 		# This should not happen because argparse validates the choice

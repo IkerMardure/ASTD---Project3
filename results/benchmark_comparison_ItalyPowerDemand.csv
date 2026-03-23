@@ -1,2 +1,0 @@
-dataset,classifier,accuracy,fit_time_s,predict_time_s,status,error
-ItalyPowerDemand,TSF (ours),0.9620991253644315,0.0,6.668643700017128,ok,
