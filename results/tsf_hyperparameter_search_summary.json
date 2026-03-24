@@ -1,0 +1,229 @@
+{
+    "runs": [
+        {
+            "dataset": "ECG5000",
+            "method": "optuna",
+            "best_params": {
+                "n_estimators": 200,
+                "min_interval_length": 4,
+                "n_intervals": 19,
+                "max_interval_length": 70,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9550009565913947,
+            "best_std": 0.004480500389938751,
+            "elapsed_seconds": 1415.8482446670532
+        },
+        {
+            "dataset": "ECG5000",
+            "method": "grid",
+            "best_params": {
+                "n_estimators": 50,
+                "min_interval_length": 15,
+                "n_intervals": 24,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9546010365753981,
+            "best_std": 0.0046976219498172855,
+            "elapsed_seconds": 2153.6011142730713
+        },
+        {
+            "dataset": "ECG5000",
+            "method": "random",
+            "best_params": {
+                "n_estimators": 50,
+                "min_interval_length": 15,
+                "n_intervals": 24,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9546010365753981,
+            "best_std": 0.0046976219498172855,
+            "elapsed_seconds": 2131.062378168106
+        },
+        {
+            "dataset": "ElectricDevices",
+            "method": "optuna",
+            "best_params": {
+                "n_estimators": 300,
+                "min_interval_length": 3,
+                "n_intervals": 14,
+                "max_interval_length": 20,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.8287549951109777,
+            "best_std": 0.0026678030489385076,
+            "elapsed_seconds": 4636.6323919296265
+        },
+        {
+            "dataset": "ElectricDevices",
+            "method": "grid",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 20,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.8257496311148412,
+            "best_std": 0.002552772734421504,
+            "elapsed_seconds": 7273.9615178108215
+        },
+        {
+            "dataset": "ElectricDevices",
+            "method": "random",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 20,
+                "max_interval_length": 96,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.8257496311148412,
+            "best_std": 0.002552772734421504,
+            "elapsed_seconds": 6348.91726398468
+        },
+        {
+            "dataset": "GunPoint",
+            "method": "optuna",
+            "best_params": {
+                "n_estimators": 450,
+                "min_interval_length": 6,
+                "n_intervals": 9,
+                "max_interval_length": 30,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9950248756218905,
+            "best_std": 0.007035888370015418,
+            "elapsed_seconds": 60.880674600601196
+        },
+        {
+            "dataset": "GunPoint",
+            "method": "grid",
+            "best_params": {
+                "n_estimators": 50,
+                "min_interval_length": 3,
+                "n_intervals": 24,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9950248756218905,
+            "best_std": 0.007035888370015418,
+            "elapsed_seconds": 96.64045715332031
+        },
+        {
+            "dataset": "GunPoint",
+            "method": "random",
+            "best_params": {
+                "n_estimators": 50,
+                "min_interval_length": 3,
+                "n_intervals": 24,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9950248756218905,
+            "best_std": 0.007035888370015418,
+            "elapsed_seconds": 96.71767854690552
+        },
+        {
+            "dataset": "InlineSkate",
+            "method": "optuna",
+            "best_params": {
+                "n_estimators": 300,
+                "min_interval_length": 3,
+                "n_intervals": 61,
+                "max_interval_length": 40,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.5630795926494851,
+            "best_std": 0.03764657101663349,
+            "elapsed_seconds": 526.6290273666382
+        },
+        {
+            "dataset": "InlineSkate",
+            "method": "grid",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 21,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.5630867042157365,
+            "best_std": 0.007215608336291936,
+            "elapsed_seconds": 1104.369777917862
+        },
+        {
+            "dataset": "InlineSkate",
+            "method": "random",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 21,
+                "max_interval_length": 1882,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.5630867042157365,
+            "best_std": 0.007215608336291936,
+            "elapsed_seconds": 1094.6905314922333
+        },
+        {
+            "dataset": "ItalyPowerDemand",
+            "method": "optuna",
+            "best_params": {
+                "n_estimators": 350,
+                "min_interval_length": 3,
+                "n_intervals": 8,
+                "max_interval_length": 10,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9707912268882403,
+            "best_std": 0.011276211243138691,
+            "elapsed_seconds": 118.19562411308289
+        },
+        {
+            "dataset": "ItalyPowerDemand",
+            "method": "grid",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 10,
+                "max_interval_length": null,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9707912268882403,
+            "best_std": 0.011276211243138691,
+            "elapsed_seconds": 173.10148906707764
+        },
+        {
+            "dataset": "ItalyPowerDemand",
+            "method": "random",
+            "best_params": {
+                "n_estimators": 500,
+                "min_interval_length": 3,
+                "n_intervals": 10,
+                "max_interval_length": 24,
+                "n_jobs": -1,
+                "random_state": 42
+            },
+            "best_score": 0.9707912268882403,
+            "best_std": 0.011276211243138691,
+            "elapsed_seconds": 171.89711046218872
+        }
+    ]
+}

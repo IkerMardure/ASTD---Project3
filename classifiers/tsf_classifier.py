@@ -39,6 +39,10 @@ class TSFConfig:
 	n_estimators: int = 200
 	# aeon >=1.0 uses "min_interval_length" (not "min_interval").
 	min_interval_length: int = 3
+	# Number of random intervals per tree. Keep None to use aeon default.
+	n_intervals: int | str | None = None
+	# Maximum interval size. Keep None to use aeon default behavior.
+	max_interval_length: int | None = None
 	n_jobs: int = -1
 	random_state: int | None = 42
 
@@ -64,6 +68,10 @@ class AeonTSFClassifier:
 			"n_jobs": self.config.n_jobs,
 			"random_state": self.config.random_state,
 		}
+		if self.config.n_intervals is not None:
+			params["n_intervals"] = self.config.n_intervals
+		if self.config.max_interval_length is not None:
+			params["max_interval_length"] = self.config.max_interval_length
 		params.update(kwargs)
 
 		self.model = tsf_cls(**params)

@@ -43,6 +43,43 @@ def compute_metric(
 
 
 # Model evaluation
+def _infer_n_timepoints(X: np.ndarray) -> int:
+    """Infer number of timepoints from 2D/3D time series arrays."""
+    X_arr = np.asarray(X)
+    if X_arr.ndim == 2:
+        return int(X_arr.shape[1])
+    if X_arr.ndim == 3:
+        return int(X_arr.shape[2])
+    raise ValueError(f"Expected a 2D or 3D array for X, got shape {X_arr.shape}")
+
+
+def _build_tsf_config(
+    params: dict[str, Any],
+    n_timepoints: int,
+) -> TSFConfig:
+    """Create a TSFConfig while keeping interval limits valid for the series length."""
+    min_interval_length = int(params["min_interval_length"])
+    max_interval_raw = params.get("max_interval_length")
+    max_interval_length: int | None
+
+    if max_interval_raw is None:
+        max_interval_length = None
+    else:
+        max_interval_length = int(max_interval_raw)
+        max_interval_length = max(1, min(max_interval_length, n_timepoints))
+        # Keep max interval at least as large as min interval.
+        max_interval_length = max(max_interval_length, min_interval_length)
+
+    return TSFConfig(
+        n_estimators=int(params["n_estimators"]),
+        min_interval_length=min_interval_length,
+        n_intervals=params.get("n_intervals"),
+        max_interval_length=max_interval_length,
+        n_jobs=int(params.get("n_jobs", -1)),
+        random_state=int(params.get("random_state", 42)),
+    )
+
+
 def evaluate_single_split(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -52,12 +89,8 @@ def evaluate_single_split(
     metric: str = "accuracy",
 ) -> float:
     """Train TSF on one split and evaluate on validation data."""
-    config = TSFConfig(
-        n_estimators=int(params["n_estimators"]),
-        min_interval_length=int(params["min_interval_length"]),
-        n_jobs=int(params.get("n_jobs", -1)),
-        random_state=int(params.get("random_state", 42)),
-    )
+    n_timepoints = _infer_n_timepoints(X_train)
+    config = _build_tsf_config(params=params, n_timepoints=n_timepoints)
 
     clf = AeonTSFClassifier(config=config)
     clf.fit(X_train, y_train)
@@ -116,7 +149,29 @@ def cross_validate_params(
 
 
 # Search spaces
-def default_grid_space() -> dict[str, list[Any]]:
+def _default_n_intervals_candidates(n_timepoints: int) -> list[int]:
+    """Return conservative, dataset-relative n_intervals candidates."""
+    sqrt_tp = max(4, int(round(math.sqrt(n_timepoints))))
+    candidates = {
+        max(4, sqrt_tp // 2),
+        max(4, sqrt_tp),
+        max(4, int(round(1.5 * sqrt_tp))),
+        max(4, 2 * sqrt_tp),
+    }
+    return sorted(candidates)
+
+
+def _default_max_interval_candidates(n_timepoints: int) -> list[int | None]:
+    """Return conservative, dataset-relative max interval candidates."""
+    fractions = [0.25, 0.5, 0.75, 1.0]
+    candidates = {
+        max(1, int(round(n_timepoints * frac)))
+        for frac in fractions
+    }
+    return [None] + sorted(candidates)
+
+
+def default_grid_space(n_timepoints: int) -> dict[str, list[Any]]:
     """
     Discrete search space for grid/random search.
     """
@@ -124,18 +179,36 @@ def default_grid_space() -> dict[str, list[Any]]:
         #these are the actual hyperparameters that we are tuning in our TSF model:
         "n_estimators": [50, 100, 200, 300, 500], #number of trees in the forest
         "min_interval_length": [3, 5, 7, 10, 15], #minimum size of time intervals extracted from the series
+        "n_intervals": _default_n_intervals_candidates(n_timepoints), #number of random intervals sampled per tree
+        "max_interval_length": _default_max_interval_candidates(n_timepoints), #upper bound on interval size (None keeps aeon default)
         "n_jobs": [-1], #This controls how many CPU cores the model uses --> n_jobs = -1: use all available cores
         "random_state": [42], #if you run the code twice, you should get the same splits and very similar same outcomes
     }
 
 
-def default_optuna_space(trial: "optuna.trial.Trial") -> dict[str, Any]:
+def default_optuna_space(
+    trial: Any,
+    n_timepoints: int,
+) -> dict[str, Any]:
     """
     Search space for Optuna.
     """
+    interval_candidates = _default_n_intervals_candidates(n_timepoints)
     return {
         "n_estimators": trial.suggest_int("n_estimators", 50, 500, step=50),
         "min_interval_length": trial.suggest_int("min_interval_length", 3, 20),
+        "n_intervals": trial.suggest_int(
+            "n_intervals",
+            min(interval_candidates),
+            max(interval_candidates),
+            step=1,
+        ),
+        "max_interval_length": trial.suggest_int(
+            "max_interval_length",
+            10,
+            max(10, min(200, n_timepoints)),
+            step=10,
+        ),
         "n_jobs": -1,
         "random_state": 42,
     }
@@ -155,7 +228,8 @@ def grid_search(
     Exhaustive grid search over all parameter combinations.
     """
     if param_grid is None:
-        param_grid = default_grid_space()
+        n_timepoints = _infer_n_timepoints(X)
+        param_grid = default_grid_space(n_timepoints=n_timepoints)
 
     keys = list(param_grid.keys())
     values = [param_grid[k] for k in keys]
@@ -230,7 +304,8 @@ def random_search(
     Random search over a discrete hyperparameter space.
     """
     if param_distributions is None:
-        param_distributions = default_grid_space()
+        n_timepoints = _infer_n_timepoints(X)
+        param_distributions = default_grid_space(n_timepoints=n_timepoints)
 
     rng = random.Random(random_state)
 
@@ -312,12 +387,13 @@ def optuna_search(
 
     X_arr = np.asarray(X)
     y_arr = np.asarray(y)
+    n_timepoints = _infer_n_timepoints(X_arr)
     trial_results: list[dict[str, Any]] = []
 
     #1. Define the objective
-    def objective(trial: "optuna.trial.Trial") -> float:
+    def objective(trial: Any) -> float:
         #2. It samples hyperparameters
-        params = default_optuna_space(trial)
+        params = default_optuna_space(trial, n_timepoints=n_timepoints)
         #3. It evaluates them
         result = cross_validate_params(
             X=X_arr,
@@ -376,12 +452,8 @@ def fit_best_model(
     best_params: dict[str, Any],
 ) -> AeonTSFClassifier:
     """Train final model on full dataset using best hyperparameters."""
-    config = TSFConfig(
-        n_estimators=int(best_params["n_estimators"]),
-        min_interval_length=int(best_params["min_interval_length"]),
-        n_jobs=int(best_params.get("n_jobs", -1)),
-        random_state=int(best_params.get("random_state", 42)),
-    )
+    n_timepoints = _infer_n_timepoints(X)
+    config = _build_tsf_config(params=best_params, n_timepoints=n_timepoints)
 
     clf = AeonTSFClassifier(config=config)
     clf.fit(X, y)
@@ -482,19 +554,21 @@ def run_hyperparameter_search(
 # Example usage with real datasets (UCR/UEA format)
 if __name__ == "__main__":
     from aeon.datasets import load_from_ts_file
-    #datasets = [
-     #   "ECG5000",
-      #  "ElectricDevices",
-       # "GunPoint",
-        #"InlineSkate",
-        #"ItalyPowerDemand",
-    #]
+    datasets = [
+        "ECG5000",
+        "ElectricDevices",
+        "GunPoint",
+        "InlineSkate",
+        "ItalyPowerDemand",
+    ]
+    methods = ["optuna", "grid", "random"]
 
-    datasets = ["GunPoint"]
+    def _compact_values(values: list[Any]) -> list[Any]:
+        if len(values) <= 2:
+            return values
+        return [values[0], values[-1]]
 
-    #methods = ["optuna", "grid", "random"]
-
-    methods = ["optuna"]
+    summary_rows: list[dict[str, Any]] = []
 
     for dataset_name in datasets:
         print(f"\n{'#' * 70}")
@@ -514,6 +588,16 @@ if __name__ == "__main__":
 
         print(f"Loaded dataset with shape: {X.shape}")
 
+        # Keep grid search feasible while still exploring all tuned hyperparameters.
+        n_timepoints = _infer_n_timepoints(X)
+        base_grid = default_grid_space(n_timepoints=n_timepoints)
+        compact_grid = {
+            key: _compact_values(values)
+            for key, values in base_grid.items()
+        }
+        total_combinations = math.prod(len(v) for v in compact_grid.values())
+        print(f"Compact grid combinations: {total_combinations}")
+
         # Run hyperparameter search methods
         for method in methods:
             print(f"\n{'=' * 60}")
@@ -524,11 +608,12 @@ if __name__ == "__main__":
                 X=X,
                 y=y,
                 method=method,
-                cv=3, #5,
+                cv=3,
                 metric="accuracy",
                 random_state=42,
-                n_trials=3, #20,   # optuna
-                n_iter=3, #15,     # random
+                n_trials=12,
+                n_iter=16,
+                param_grid=compact_grid,
                 verbose=True,
             )
 
@@ -546,3 +631,18 @@ if __name__ == "__main__":
             save_search_results(results, save_path)
 
             print(f"Saved results to: {save_path}")
+
+            summary_rows.append(
+                {
+                    "dataset": dataset_name,
+                    "method": method,
+                    "best_params": results["best_params"],
+                    "best_score": results["best_score"],
+                    "best_std": results.get("best_std", None),
+                    "elapsed_seconds": results.get("elapsed_seconds", None),
+                }
+            )
+
+    summary_path = PROJECT_ROOT / "results" / "tsf_hyperparameter_search_summary.json"
+    save_search_results({"runs": summary_rows}, summary_path)
+    print(f"Saved global summary to: {summary_path}")
