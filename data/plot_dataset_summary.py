@@ -24,16 +24,16 @@ def main():
 
     plt.figure(figsize=(12, 6))
 
-    # Stacked bars (mejoradas)
+    # Stacked bars (estilo verde como en la imagen)
     plt.bar(x, train_sizes,
             label="Train size",
-            color="#f8c8dc",   # rosa palo
+            color="#2e8b57",   # verde oscuro
             edgecolor="black")
 
     plt.bar(x, test_sizes,
             bottom=train_sizes,
             label="Test size",
-            color="#ff1493",   # fucsia
+            color="#98fb98",   # verde claro
             edgecolor="black")
 
     # Línea roja
