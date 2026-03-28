@@ -7,11 +7,13 @@ to compare classifiers with consistent metrics.
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 import time
 from typing import Any
 
 import joblib
+from joblib import Parallel, delayed
 import numpy as np
 from scipy.stats import wilcoxon
 from sklearn.metrics import balanced_accuracy_score, f1_score, precision_score, recall_score
@@ -21,6 +23,62 @@ from classifiers.benchmarks.suite import (
 	instantiate_benchmark,
 )
 from classifiers.tsf_classifier import AeonTSFClassifier, TSFConfig
+
+
+def load_tsf_best_params(path: str | Path) -> dict[str, dict[str, Any]]:
+	"""Load best TSF hyperparameter config per dataset from JSON summary file."""
+	file_path = Path(path)
+	if not file_path.exists():
+		return {}
+	with file_path.open("r", encoding="utf-8") as f:
+		data = json.load(f)
+	if not isinstance(data, dict):
+		return {}
+
+	best_runs = data.get("best_runs")
+	if not isinstance(best_runs, dict):
+		return {}
+
+	result: dict[str, dict[str, Any]] = {}
+	for dataset, dataset_run in best_runs.items():
+		params = dataset_run.get("best_params") if isinstance(dataset_run, dict) else None
+		if isinstance(params, dict):
+			result[str(dataset)] = {
+				"n_estimators": int(params.get("n_estimators", 200)),
+				"min_interval_length": int(params.get("min_interval_length", 3)),
+				"n_intervals": int(params.get("n_intervals", 10)),
+				"max_interval_length": None if params.get("max_interval_length") is None else int(params.get("max_interval_length")),
+				"n_jobs": int(params.get("n_jobs", -1)),
+				"random_state": int(params.get("random_state", 42)),
+			}
+	return result
+
+
+def _build_tsf_config_from_params(params: dict[str, Any], default_random_state: int | None = 42) -> TSFConfig:
+	"""Build TSFConfig from params mapping with defaults and type conversion."""
+	if params is None:
+		params = {}
+
+	n_estimators = int(params.get("n_estimators", 200))
+	min_interval_length = int(params.get("min_interval_length", 3))
+	n_intervals = int(params.get("n_intervals", 10))
+	max_interval = params.get("max_interval_length")
+	if max_interval is None:
+		max_interval_length = None
+	else:
+		max_interval_length = int(max_interval)
+
+	n_jobs = int(params.get("n_jobs", -1))
+	random_state = int(params.get("random_state", default_random_state or 42))
+
+	return TSFConfig(
+		n_estimators=n_estimators,
+		min_interval_length=min_interval_length,
+		n_intervals=n_intervals,
+		max_interval_length=max_interval_length,
+		n_jobs=n_jobs,
+		random_state=random_state,
+	)
 
 
 def _to_3d_numpy(X: np.ndarray) -> np.ndarray:
@@ -41,6 +99,21 @@ def _sanitize_filename(name: str) -> str:
 
 def _ensure_dir(path: Path) -> None:
 	path.mkdir(parents=True, exist_ok=True)
+
+
+def _dataset_checkpoint_path(checkpoint_dir: str | Path | None, dataset_name: str) -> Path | None:
+	"""Compute a per-dataset checkpoint path for incremental classifier results."""
+	if checkpoint_dir is None:
+		return None
+	return Path(checkpoint_dir) / f"{_sanitize_filename(dataset_name)}_checkpoint.jsonl"
+
+
+def _append_jsonl_row(row: dict[str, Any], path: Path) -> None:
+	"""Append one JSON object row to newline-delimited JSON file."""
+	_ensure_dir(path.parent)
+	with path.open("a", encoding="utf-8") as f:
+		f.write(json.dumps(row, ensure_ascii=False))
+		f.write("\n")
 
 
 def _compute_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
@@ -299,6 +372,8 @@ def run_benchmark_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	ts_config_path: str | Path | None = "results/best_of_best_tsf.json",
+	checkpoint_path: str | Path | None = None,
 	model_dir: str | Path | None = None,
 	predictions_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
@@ -322,54 +397,69 @@ def run_benchmark_suite(
 
 	rows: list[dict[str, Any]] = []
 
+	def _checkpoint_row(row: dict[str, Any]) -> None:
+		if checkpoint_path is None:
+			return
+		try:
+			_append_jsonl_row(row, Path(checkpoint_path))
+		except Exception as exc:
+			print(f"WARNING: unable to checkpoint row (dataset={dataset_name}): {exc}", flush=True)
+
+	best_params_map = load_tsf_best_params(ts_config_path) if ts_config_path else {}
+	selected_tsf_params = best_params_map.get(dataset_name, {
+		"n_estimators": n_estimators_tsf,
+		"random_state": random_state,
+	})
+
 	if include_tsf:
 		try:
 			tsfc = AeonTSFClassifier(
-				config=TSFConfig(
-					n_estimators=n_estimators_tsf,
-					random_state=random_state,
-				)
+				config=_build_tsf_config_from_params(selected_tsf_params, default_random_state=random_state)
 			)
 			model_path = _model_path(Path(model_dir), dataset_name, "TSF (ours)") if model_dir else None
 			predictions_path = _predictions_path(Path(predictions_dir), dataset_name, "TSF (ours)") if predictions_dir else None
-			rows.append(
-				_evaluate_model(
-					model=tsfc,
-					model_name="TSF (ours)",
-					dataset_name=dataset_name,
-					X_train=X_train,
-					y_train=y_train,
-					X_test=X_test,
-					y_test=y_test,
-					model_path=model_path,
-					predictions_path=predictions_path,
-				)
+			result = _evaluate_model(
+				model=tsfc,
+				model_name="TSF (ours)",
+				dataset_name=dataset_name,
+				X_train=X_train,
+				y_train=y_train,
+				X_test=X_test,
+				y_test=y_test,
+				model_path=model_path,
+				predictions_path=predictions_path,
 			)
+			rows.append(result)
+			_checkpoint_row(result)
 		except Exception as exc:
 			print(f"  [{dataset_name}] TSF (ours) — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(_error_result_row(dataset_name, "TSF (ours)", exc))
+			row = _error_result_row(dataset_name, "TSF (ours)", exc)
+			rows.append(row)
+			_checkpoint_row(row)
 
 	for spec in selected_specs:
 		try:
 			model = instantiate_benchmark(spec=spec, random_state=random_state)
 			model_path = _model_path(Path(model_dir), dataset_name, spec.name) if model_dir else None
 			predictions_path = _predictions_path(Path(predictions_dir), dataset_name, spec.name) if predictions_dir else None
-			rows.append(
-				_evaluate_model(
-					model=model,
-					model_name=spec.name,
-					dataset_name=dataset_name,
-					X_train=X_train,
-					y_train=y_train,
-					X_test=X_test,
-					y_test=y_test,
-					model_path=model_path,
-					predictions_path=predictions_path,
-				)
+			result = _evaluate_model(
+				model=model,
+				model_name=spec.name,
+				dataset_name=dataset_name,
+				X_train=X_train,
+				y_train=y_train,
+				X_test=X_test,
+				y_test=y_test,
+				model_path=model_path,
+				predictions_path=predictions_path,
 			)
+			rows.append(result)
+			_checkpoint_row(result)
 		except Exception as exc:
 			print(f"  [{dataset_name}] {spec.name} — ERROR: {type(exc).__name__}: {exc}", flush=True)
-			rows.append(_error_result_row(dataset_name, spec.name, exc))
+			row = _error_result_row(dataset_name, spec.name, exc)
+			rows.append(row)
+			_checkpoint_row(row)
 
 	print(f"=== {dataset_name} done ===", flush=True)
 	return rows
@@ -382,6 +472,8 @@ def run_train_suite(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	ts_config_path: str | Path | None = "results/best_of_best_tsf.json",
+	checkpoint_path: str | Path | None = None,
 	ask_on_existing_model: bool = False,
 	load_existing_if_available: bool = False,
 	model_dir: str | Path = "trained_models",
@@ -409,6 +501,20 @@ def run_train_suite(
 		selected_specs = [spec for spec in DEFAULT_BENCHMARK_SPECS if spec.name.lower() in requested]
 
 	rows: list[dict[str, Any]] = []
+
+	def _checkpoint_row(row: dict[str, Any]) -> None:
+		if checkpoint_path is None:
+			return
+		try:
+			_append_jsonl_row(row, Path(checkpoint_path))
+		except Exception as exc:
+			print(f"WARNING: unable to checkpoint row (dataset={dataset_name}): {exc}", flush=True)
+
+	best_params_map = load_tsf_best_params(ts_config_path) if ts_config_path else {}
+	selected_tsf_params = best_params_map.get(dataset_name, {
+		"n_estimators": n_estimators_tsf,
+		"random_state": random_state,
+	})
 
 	if include_tsf:
 		model_name = "TSF (ours)"
@@ -457,10 +563,7 @@ def run_train_suite(
 			elif action == "retrain":
 				try:
 					tsfc = AeonTSFClassifier(
-						config=TSFConfig(
-							n_estimators=n_estimators_tsf,
-							random_state=random_state,
-						)
+						config=_build_tsf_config_from_params(selected_tsf_params, default_random_state=random_state)
 					)
 					rows.append(
 						_evaluate_model(
@@ -483,10 +586,7 @@ def run_train_suite(
 		if not handled:
 			try:
 				tsfc = AeonTSFClassifier(
-					config=TSFConfig(
-						n_estimators=n_estimators_tsf,
-						random_state=random_state,
-					)
+					config=_build_tsf_config_from_params(selected_tsf_params, default_random_state=random_state)
 				)
 				rows.append(
 					_evaluate_model(
@@ -671,25 +771,115 @@ def run_benchmarks_on_datasets(
 	include_tsf: bool = True,
 	random_state: int | None = 42,
 	n_estimators_tsf: int = 200,
+	ts_config_path: str | Path | None = "results/best_of_best_tsf.json",
 	model_dir: str | Path | None = None,
 	predictions_dir: str | Path | None = None,
+	checkpoint_dir: str | Path | None = None,
+	n_jobs: int = 1,
 ) -> list[dict[str, Any]]:
 	"""Run benchmark suite across multiple datasets."""
 	print(f"Starting benchmark run: {len(datasets)} dataset(s) × up to {len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers", flush=True)
-	all_rows: list[dict[str, Any]] = []
-	for i, dataset_name in enumerate(datasets, 1):
-		print(f"\n[{i}/{len(datasets)}]", end=" ", flush=True)
-		rows = run_benchmark_suite(
-			dataset_name=dataset_name,  # noqa: E501
+
+	if n_jobs == 1:
+		all_rows: list[dict[str, Any]] = []
+		for i, dataset_name in enumerate(datasets, 1):
+			print(f"\n[{i}/{len(datasets)}]", end=" ", flush=True)
+			rows = run_benchmark_suite(
+				dataset_name=dataset_name,
+				data_dir=data_dir,
+				benchmark_names=benchmark_names,
+				include_tsf=include_tsf,
+				random_state=random_state,
+				n_estimators_tsf=n_estimators_tsf,
+				ts_config_path=ts_config_path,
+				model_dir=model_dir,
+				predictions_dir=predictions_dir,
+				checkpoint_path=_dataset_checkpoint_path(checkpoint_dir, dataset_name),
+			)
+			all_rows.extend(rows)
+		return all_rows
+
+	results = Parallel(n_jobs=n_jobs)(
+		delayed(run_benchmark_suite)(
+			dataset_name=dataset_name,
 			data_dir=data_dir,
 			benchmark_names=benchmark_names,
 			include_tsf=include_tsf,
 			random_state=random_state,
 			n_estimators_tsf=n_estimators_tsf,
+			ts_config_path=ts_config_path,
 			model_dir=model_dir,
 			predictions_dir=predictions_dir,
+			checkpoint_path=_dataset_checkpoint_path(checkpoint_dir, dataset_name),
 		)
-		all_rows.extend(rows)
+		for dataset_name in datasets
+	)
+
+	all_rows: list[dict[str, Any]] = []
+	for part in results:
+		all_rows.extend(part)
+
+	return all_rows
+
+
+def run_train_on_datasets(
+	datasets: list[str],
+	data_dir: str | Path = "data",
+	benchmark_names: list[str] | None = None,
+	include_tsf: bool = True,
+	random_state: int | None = 42,
+	n_estimators_tsf: int = 200,
+	ts_config_path: str | Path | None = "results/best_of_best_tsf.json",
+	ask_on_existing_model: bool = False,
+	load_existing_if_available: bool = False,
+	model_dir: str | Path = "trained_models",
+	checkpoint_dir: str | Path | None = None,
+	n_jobs: int = 1,
+) -> list[dict[str, Any]]:
+	"""Train models across datasets in parallel optionally."""
+	print(f"Starting train suite: {len(datasets)} dataset(s) × up to {len(DEFAULT_BENCHMARK_SPECS) + (1 if include_tsf else 0)} classifiers", flush=True)
+
+	if n_jobs == 1:
+		all_rows = []
+		for i, dataset_name in enumerate(datasets, 1):
+			print(f"\n[{i}/{len(datasets)}]", end=" ", flush=True)
+			rows = run_train_suite(
+				dataset_name=dataset_name,
+				data_dir=data_dir,
+				benchmark_names=benchmark_names,
+				include_tsf=include_tsf,
+				random_state=random_state,
+				n_estimators_tsf=n_estimators_tsf,
+				ts_config_path=ts_config_path,
+				ask_on_existing_model=ask_on_existing_model,
+				load_existing_if_available=load_existing_if_available,
+				model_dir=model_dir,
+				checkpoint_path=_dataset_checkpoint_path(checkpoint_dir, dataset_name),
+			)
+			all_rows.extend(rows)
+		return all_rows
+
+	results = Parallel(n_jobs=n_jobs)(
+		delayed(run_train_suite)(
+			dataset_name=dataset_name,
+			data_dir=data_dir,
+			benchmark_names=benchmark_names,
+			include_tsf=include_tsf,
+			random_state=random_state,
+			n_estimators_tsf=n_estimators_tsf,
+			ts_config_path=ts_config_path,
+			ask_on_existing_model=ask_on_existing_model,
+			load_existing_if_available=load_existing_if_available,
+			model_dir=model_dir,
+			checkpoint_path=_dataset_checkpoint_path(checkpoint_dir, dataset_name),
+		)
+		for dataset_name in datasets
+	)
+
+	all_rows: list[dict[str, Any]] = []
+	for part in results:
+		all_rows.extend(part)
+
 	return all_rows
 
 

@@ -221,8 +221,9 @@ def generate_dataset_graph(
 	if rows * cols < 1:
 		raise ValueError("grid_shape must contain at least one subplot")
 
-	# Adjust grid to fit the requested number of plots.
+	# Keep the grid bounded by grid_shape, but allow overlay to use all selected series.
 	n_plots = min(n_samples, rows * cols)
+	overlay_plots = n_samples
 	rows = int(np.ceil(n_plots / cols))
 
 	out_dir = _ensure_dir(out_dir)
@@ -271,7 +272,7 @@ def generate_dataset_graph(
 	with plt.style.context(style):
 		fig2, ax2 = plt.subplots(figsize=(12, 5))
 		if labels_arr is not None:
-			unique_labels = list(dict.fromkeys(labels_arr[:n_plots]))
+			unique_labels = list(dict.fromkeys(labels_arr[:overlay_plots]))
 			palette = plt.rcParams.get("axes.prop_cycle").by_key().get(
 				"color", ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#F0E442"]
 			)
@@ -287,14 +288,14 @@ def generate_dataset_graph(
 		else:
 			label_to_color = {}
 
-		for i in range(n_plots):
+		for i in range(overlay_plots):
 			series = X[i]
 			x = np.arange(series.shape[0])
 			line_color = "#0072B2"
 			if labels_arr is not None:
 				line_color = label_to_color.get(labels_arr[i], line_color)
 			ax2.plot(x, series, color=line_color, alpha=0.35, linewidth=1.0)
-		ax2.set_title(f"{dataset_name} (overlay of first {n_plots} series)", fontsize=13, fontweight="bold")
+		ax2.set_title(f"{dataset_name} (overlay of {overlay_plots} series)", fontsize=13, fontweight="bold")
 		ax2.set_xlabel("Time index", fontsize=11)
 		ax2.set_ylabel("Value", fontsize=11)
 		ax2.grid(True, alpha=0.25)

@@ -76,6 +76,7 @@ python experiments/main_run.py \
 | `--benchmarks` | `benchmarks`, `train`, `forecast` | Limit which benchmark classifiers run | `--benchmarks Rocket,BOSS-ensemble` |
 | `--load-all` | `train` | Load existing models automatically (no prompt) | `--mode train --load-all` |
 | `--no-tsf` | `benchmarks`, `train`, `forecast` | Skip the TSF (ours) classifier | `--no-tsf` |
+| `--jobs` | `benchmarks`, `train` | Number of dataset-level parallel workers (>=1) | `--jobs 4` |
 | `--model-dir` | `train`, `forecast` | Custom location for saving/loading models | `--model-dir my_models` |
 | `--predictions-dir` | `forecast` | Custom location for predictions output | `--predictions-dir my_preds` |
 

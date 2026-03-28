@@ -223,6 +223,7 @@ def grid_search(
     metric: str = "accuracy",
     random_state: int = 42,
     verbose: bool = True,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Exhaustive grid search over all parameter combinations.
@@ -254,6 +255,18 @@ def grid_search(
             random_state=random_state,
         )
         all_results.append(result)
+
+        if checkpoint_path is not None:
+            _append_jsonl_row(
+                {
+                    "method": "grid_search",
+                    "iteration": idx,
+                    "params": params,
+                    "mean_score": result["mean_score"],
+                    "std_score": result["std_score"],
+                },
+                checkpoint_path,
+            )
 
         if best_result is None or result["mean_score"] > best_result["mean_score"]:
             best_result = result
@@ -299,6 +312,7 @@ def random_search(
     metric: str = "accuracy",
     random_state: int = 42,
     verbose: bool = True,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Random search over a discrete hyperparameter space.
@@ -342,6 +356,18 @@ def random_search(
         )
         all_results.append(result)
 
+        if checkpoint_path is not None:
+            _append_jsonl_row(
+                {
+                    "method": "random_search",
+                    "iteration": len(all_results),
+                    "params": params,
+                    "mean_score": result["mean_score"],
+                    "std_score": result["std_score"],
+                },
+                checkpoint_path,
+            )
+
         if best_result is None or result["mean_score"] > best_result["mean_score"]:
             best_result = result
 
@@ -376,6 +402,7 @@ def optuna_search(
     random_state: int = 42,
     study_name: str = "tsf_optuna_search",
     verbose: bool = True,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Hyperparameter search with Optuna.
@@ -410,6 +437,18 @@ def optuna_search(
 
         #save all trial results in your own list for later use (analysis, plots, JSON)
         trial_results.append(result)
+
+        if checkpoint_path is not None:
+            _append_jsonl_row(
+                {
+                    "method": "optuna_search",
+                    "trial": trial.number + 1,
+                    "params": params,
+                    "mean_score": result["mean_score"],
+                    "std_score": result["std_score"],
+                },
+                checkpoint_path,
+            )
 
         if verbose:
             print(
@@ -477,6 +516,15 @@ def make_json_serializable(obj: Any) -> Any:
     return obj
 
 
+def _append_jsonl_row(row: dict[str, Any], path: str | Path) -> None:
+    """Append one JSON object row to newline-delimited JSON file."""
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    with path_obj.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(make_json_serializable(row), ensure_ascii=False))
+        f.write("\n")
+
+
 def save_search_results(
     results: dict[str, Any],
     output_path: str | Path,
@@ -502,6 +550,7 @@ def run_hyperparameter_search(
     n_iter: int = 20,
     param_grid: dict[str, list[Any]] | None = None,
     verbose: bool = True,
+    checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Unified entry point for hyperparameter search.
@@ -517,6 +566,7 @@ def run_hyperparameter_search(
             metric=metric,
             random_state=random_state,
             verbose=verbose,
+            checkpoint_path=checkpoint_path,
         )
     elif method == "grid":
         results = grid_search(
@@ -527,6 +577,7 @@ def run_hyperparameter_search(
             metric=metric,
             random_state=random_state,
             verbose=verbose,
+            checkpoint_path=checkpoint_path,
         )
     elif method == "random":
         results = random_search(
@@ -538,6 +589,7 @@ def run_hyperparameter_search(
             metric=metric,
             random_state=random_state,
             verbose=verbose,
+            checkpoint_path=checkpoint_path,
         )
     else:
         raise ValueError(

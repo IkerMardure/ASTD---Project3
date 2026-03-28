@@ -24,7 +24,9 @@ from experiments.validation import (
 	format_wilcoxon_table,
 	format_results_table,
 	run_benchmark_suite,
+	run_benchmarks_on_datasets,
 	run_train_suite,
+	run_train_on_datasets,
 	run_predict_suite,
 	# Keep old name for backward compatibility
 	run_forecast_suite,
@@ -149,6 +151,24 @@ def main() -> None:
 			"Missing models will still be trained."
 		),
 	)
+	parser.add_argument(
+		"--tsf-config",
+		type=str,
+		default="results/best_of_best_tsf.json",
+		help="Path to TSF best hyperparameter JSON summary file.",
+	)
+	parser.add_argument(
+		"--jobs",
+		type=int,
+		default=1,
+		help="Number of parallel jobs to use for dataset-level parallel execution.",
+	)
+	parser.add_argument(
+		"--checkpoint-dir",
+		type=str,
+		default=None,
+		help="Directory where per-dataset per-classifier checkpoint JSONL logs are written.",
+	)
 	args = parser.parse_args()
 
 	if args.mode == "synthetic":
@@ -175,27 +195,46 @@ def main() -> None:
 		output_path = _resolve_output_path(output_path, "all", False)
 
 	if args.mode == "benchmarks":
-		rows = []
-
-		# Save partial progress after each dataset so results survive mid-run failures.
-		for dataset in datasets:
-			rows.extend(
-				run_benchmark_suite(
-					dataset_name=dataset,
-					data_dir=args.data_dir,
-					benchmark_names=benchmark_names,
-					include_tsf=not args.no_tsf,
-					random_state=args.seed,
-					n_estimators_tsf=args.n_estimators,
-					model_dir=args.model_dir,
-					predictions_dir=args.predictions_dir,
-				)
+		if args.jobs > 1:
+			rows = run_benchmarks_on_datasets(
+				datasets=datasets,
+				data_dir=args.data_dir,
+				benchmark_names=benchmark_names,
+				include_tsf=not args.no_tsf,
+				random_state=args.seed,
+				n_estimators_tsf=args.n_estimators,
+				ts_config_path=args.tsf_config,
+				model_dir=args.model_dir,
+				predictions_dir=args.predictions_dir,
+				checkpoint_dir=args.checkpoint_dir,
+				n_jobs=args.jobs,
 			)
+			output_path = save_results_csv(rows=rows, output_path=output_path)
+			print(f"Saved results to: {output_path}")
+		else:
+			rows = []
 
-			save_results_csv(rows=rows, output_path=output_path)
-			print(f"Saved partial results to: {output_path}")
+			# Save partial progress after each dataset so results survive mid-run failures.
+			for dataset in datasets:
+				rows.extend(
+					run_benchmark_suite(
+						dataset_name=dataset,
+						data_dir=args.data_dir,
+						benchmark_names=benchmark_names,
+						include_tsf=not args.no_tsf,
+						random_state=args.seed,
+						n_estimators_tsf=args.n_estimators,
+						ts_config_path=args.tsf_config,
+						model_dir=args.model_dir,
+						predictions_dir=args.predictions_dir,
+						checkpoint_path=(Path(args.checkpoint_dir)/f"{_sanitize_filename(dataset)}_checkpoint.jsonl") if args.checkpoint_dir else None,
+					)
+				)
 
-		print(format_results_table(rows))
+				save_results_csv(rows=rows, output_path=output_path)
+				print(f"Saved partial results to: {output_path}")
+
+			print(format_results_table(rows))
 
 		if not args.no_tsf:
 			wilcoxon_rows = compute_wilcoxon_vs_reference(
@@ -217,43 +256,44 @@ def main() -> None:
 			print(f"Saved Wilcoxon summary to: {wilcoxon_output_path}")
 
 	elif args.mode == "train":
-		rows = []
-		for dataset in datasets:
-			dataset_rows = run_train_suite(
-				dataset_name=dataset,
+		if args.jobs > 1:
+			rows = run_train_on_datasets(
+				datasets=datasets,
 				data_dir=args.data_dir,
 				benchmark_names=benchmark_names,
 				include_tsf=not args.no_tsf,
 				random_state=args.seed,
 				n_estimators_tsf=args.n_estimators,
+				ts_config_path=args.tsf_config,
 				ask_on_existing_model=not args.load_all,
 				load_existing_if_available=args.load_all,
 				model_dir=args.model_dir,
+				checkpoint_dir=args.checkpoint_dir,
+				n_jobs=args.jobs,
 			)
-			rows.extend(dataset_rows)
+			output_path = save_results_csv(rows=rows, output_path=output_path)
+			print(f"Saved results to: {output_path}")
+		else:
+			rows = []
+			for dataset in datasets:
+				dataset_rows = run_train_suite(
+					dataset_name=dataset,
+					data_dir=args.data_dir,
+					benchmark_names=benchmark_names,
+					include_tsf=not args.no_tsf,
+					random_state=args.seed,
+					n_estimators_tsf=args.n_estimators,
+					ts_config_path=args.tsf_config,
+					ask_on_existing_model=not args.load_all,
+					load_existing_if_available=args.load_all,
+					model_dir=args.model_dir,
+					checkpoint_path=(Path(args.checkpoint_dir) / f"{_sanitize_filename(dataset)}_checkpoint.jsonl") if args.checkpoint_dir else None,
+				)
+				rows.extend(dataset_rows)
 
-			# Save after each dataset to preserve progress.
-			save_results_csv(rows=rows, output_path=output_path)
-			print(f"Saved partial results to: {output_path}")
-
-	elif args.mode in ("predict", "forecast"):
-		rows = []
-		for dataset in datasets:
-			dataset_rows = run_predict_suite(
-				dataset_name=dataset,
-				data_dir=args.data_dir,
-				benchmark_names=benchmark_names,
-				include_tsf=not args.no_tsf,
-				random_state=args.seed,
-				n_estimators_tsf=args.n_estimators,
-				model_dir=args.model_dir,
-				predictions_dir=args.predictions_dir,
-			)
-			rows.extend(dataset_rows)
-
-			# Save after each dataset to preserve progress.
-			save_results_csv(rows=rows, output_path=output_path)
-			print(f"Saved partial results to: {output_path}")
+				# Save after each dataset to preserve progress.
+				save_results_csv(rows=rows, output_path=output_path)
+				print(f"Saved partial results to: {output_path}")
 
 	else:
 		# This should not happen because argparse validates the choice

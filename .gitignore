@@ -1,1 +1,9 @@
 .venv/
+.trained/models
+
+# Model artifacts
+*.joblib
+
+# Python cache
+__pycache__/
+*.pyc

@@ -78,7 +78,7 @@ def _load_ucr_stats(data_dir: Path, dataset_name: str) -> dict[str, int]:
     }
 
 
-def collect_results(results_csv: Path, data_dir: Path) -> dict[str, Any]:
+def collect_results(results_csv: Path, data_dir: Path, wilcoxon_csv: Path | None = None) -> dict[str, Any]:
     df = pd.read_csv(results_csv)
     if df.empty:
         raise ValueError(f"Results file '{results_csv}' is empty")
@@ -105,6 +105,10 @@ def collect_results(results_csv: Path, data_dir: Path) -> dict[str, Any]:
 
             metrics_by_dataset[ds][cls] = {
                 "accuracy": float(row.get("accuracy", 0.0) or 0.0),
+                "f1_weighted": float(row.get("f1_weighted", 0.0) or 0.0),
+                "precision_weighted": float(row.get("precision_weighted", 0.0) or 0.0),
+                "recall_weighted": float(row.get("recall_weighted", 0.0) or 0.0),
+                "balanced_accuracy": float(row.get("balanced_accuracy", 0.0) or 0.0),
                 "fit_time_s": train_t,
                 "predict_time_s": test_t,
             }
@@ -119,12 +123,18 @@ def collect_results(results_csv: Path, data_dir: Path) -> dict[str, Any]:
                 "testT": test_t,
             })
 
+    # Load Wilcoxon results if available
+    wilcoxon_data = None
+    if wilcoxon_csv is not None:
+        wilcoxon_data = load_wilcoxon_csv(wilcoxon_csv)
+
     return {
         "datasets": dataset_stats,
         "classifiers": classifiers,
         "metrics_by_dataset": metrics_by_dataset,
         "raw": df,
         "timing_records": records,
+        "wilcoxon_results": wilcoxon_data,
     }
 
 
@@ -151,17 +161,282 @@ def collect_hyperparameter_results(hp_dir: Path) -> list[dict[str, Any]]:
     return results
 
 
-def build_metrics_figures(payload: dict[str, Any], dataset: str):
+def load_wilcoxon_csv(wilcoxon_csv: Path) -> pd.DataFrame | None:
+    """Load Wilcoxon test results CSV if available."""
+    if not wilcoxon_csv.exists():
+        return None
+    try:
+        df = pd.read_csv(wilcoxon_csv)
+        return df
+    except Exception:
+        return None
+
+
+def get_metric_metadata() -> dict[str, dict[str, str]]:
+    """Return metadata for available metrics (labels, formatters, etc.)."""
+    return {
+        "accuracy": {
+            "label": "Accuracy",
+            "unit": "%",
+            "range": [0, 100],
+            "higher_is_better": True,
+        },
+        "f1_weighted": {
+            "label": "F1-weighted",
+            "unit": "",
+            "range": [0, 1],
+            "higher_is_better": True,
+        },
+        "precision_weighted": {
+            "label": "Precision-weighted",
+            "unit": "",
+            "range": [0, 1],
+            "higher_is_better": True,
+        },
+        "recall_weighted": {
+            "label": "Recall-weighted",
+            "unit": "",
+            "range": [0, 1],
+            "higher_is_better": True,
+        },
+        "balanced_accuracy": {
+            "label": "Balanced Accuracy",
+            "unit": "",
+            "range": [0, 1],
+            "higher_is_better": True,
+        },
+    }
+
+
+def format_params_dict(params_dict: dict[str, Any]) -> str:
+    """Format hyperparameter dict to readable key=value string."""
+    if not params_dict:
+        return "(no parameters)"
+    
+    items = []
+    for k, v in sorted(params_dict.items()):
+        if isinstance(v, float):
+            items.append(f"{k}={v:.4g}")
+        else:
+            items.append(f"{k}={v}")
+    return ", ".join(items)
+
+
+def select_series_by_mode(
+    X: Any, y: Any, mode: str, n_series: int, random_state: int = 42
+) -> tuple[Any, Any]:
+    """
+    Select time series from dataset X, y by selected mode.
+    
+    Args:
+        X: numpy array of shape (n_samples, n_timestamps)
+        y: numpy array of shape (n_samples,) with class labels
+        mode: "all" (first n_series), "balanced" (equal per class), "random" (shuffle & sample)
+        n_series: max number of series to return (-1 means all)
+        random_state: seed for reproducibility
+    
+    Returns:
+        (X_selected, y_selected) tuple
+    """
+    import numpy as np
+    
+    if n_series == -1:
+        n_series = len(X)
+    
+    if mode == "balanced":
+        classes = np.unique(y)
+        per_class = max(1, n_series // len(classes))
+        indices = []
+        for cls in classes:
+            cls_idx = np.where(y == cls)[0]
+            count = min(per_class, len(cls_idx))
+            indices.extend(cls_idx[:count])
+        indices = indices[:n_series]
+        return X[indices], y[indices]
+    
+    elif mode == "random":
+        rng = np.random.RandomState(random_state)
+        idx = rng.choice(len(X), min(n_series, len(X)), replace=False)
+        return X[idx], y[idx]
+    
+    else:  # "all" (sequential first n_series)
+        return X[:n_series], y[:n_series]
+
+
+def build_wilcoxon_panel(wilcoxon_df: pd.DataFrame | None, metric_name: str = "f1_weighted") -> html.Div:
+    """Build Wilcoxon statistical test results panel."""
+    if wilcoxon_df is None or wilcoxon_df.empty:
+        return html.Div(
+            html.P("Wilcoxon test results not available. Run benchmark with statistic mode enabled.", style={"color": "#999"}),
+            style={"padding": "12px", "background": "#f5f5f5", "borderRadius": "8px", "border": "1px dashed #ddd"}
+        )
+    
+    # Filter for the current metric if available
+    if "metric" in wilcoxon_df.columns:
+        df_filtered = wilcoxon_df[wilcoxon_df.get("metric", "f1_weighted") == metric_name].copy() if metric_name in wilcoxon_df["metric"].values else wilcoxon_df.copy()
+    else:
+        df_filtered = wilcoxon_df.copy()
+    
+    if df_filtered.empty:
+        return html.Div(
+            html.P(f"No Wilcoxon results for metric '{metric_name}'", style={"color": "#999"}),
+            style={"padding": "12px", "background": "#f5f5f5", "borderRadius": "8px", "border": "1px dashed #ddd"}
+        )
+    
+    # Build table data
+    table_data = []
+    for _, row in df_filtered.iterrows():
+        p_value = float(row.get("p_value", 1.0))
+        is_significant = bool(row.get("significant", False))
+        table_data.append({
+            "Baseline": str(row.get("classifier", "?")),
+            "p-value": f"{p_value:.4f}",
+            "Significant": "✓ Yes" if is_significant else "✗ No",
+            "Mean Δ": f"{float(row.get('mean_delta', 0)):.4f}",
+            "TSF Better": int(row.get("candidate_better_count", 0)),
+            "Baseline Better": int(row.get("reference_better_count", 0)),
+        })
+    
+    # Build styled table
+    table_children = [
+        html.H4("Wilcoxon Test Results (TSF vs Baselines)", style={"marginBottom": "10px", "fontSize": "14px", "fontWeight": "600"}),
+        html.P(f"Paired Wilcoxon signed-rank test (α=0.05, metric: {metric_name})", style={"fontSize": "12px", "color": "#666", "marginBottom": "10px"}),
+        dash_table.DataTable(
+            data=table_data,
+            columns=[{"name": c, "id": c} for c in table_data[0].keys()] if table_data else [],
+            style_table={"overflowX": "auto", "marginBottom": "8px"},
+            style_cell={"padding": "8px", "fontSize": "12px", "textAlign": "left"},
+            style_data_conditional=[
+                {
+                    "if": {"column_id": "Significant", "filter_query": "{Significant} contains 'Yes'"},
+                    "backgroundColor": "#d4edda",
+                    "color": "#155724",
+                    "fontWeight": "600",
+                },
+                {
+                    "if": {"column_id": "Significant", "filter_query": "{Significant} contains 'No'"},
+                    "backgroundColor": "#f8f9fa",
+                    "color": "#666",
+                },
+            ],
+            style_header={
+                "backgroundColor": "#f5f5f5",
+                "fontWeight": "600",
+                "border": "1px solid #ddd",
+                "fontSize": "12px",
+            },
+            style_cell_conditional=[
+                {"if": {"column_id": "TSF Better"}, "textAlign": "center"},
+                {"if": {"column_id": "Baseline Better"}, "textAlign": "center"},
+            ],
+        ),
+    ]
+    
+    return html.Div(
+        table_children,
+        style={"marginTop": "12px", "padding": "12px", "background": "#fafaf8", "border": "1px solid #e8e7e3", "borderRadius": "8px"}
+    )
+
+
+def build_metrics_delta_chart(payload: dict[str, Any], dataset: str, metric_name: str = "accuracy") -> go.Figure:
+    """Build delta chart showing performance gap vs TSF (ours)."""
+    metric_values = {}
+    dataset_metrics = payload["metrics_by_dataset"].get(dataset, {})
+    
+    for cls, data in dataset_metrics.items():
+        val = data.get(metric_name, 0.0)
+        metric_values[cls] = val * 100
+    
+    tsf_value = metric_values.get("TSF (ours)", 0.0)
+    if tsf_value == 0:
+        return go.Figure().add_annotation(text="TSF not available in dataset")
+    
+    # Calculate deltas (negative = worse, positive = better than TSF)
+    deltas = {cls: val - tsf_value for cls, val in metric_values.items() if cls != "TSF (ours)"}
+    
+    if not deltas:
+        empty = go.Figure()
+        empty.update_layout(title="No baseline classifiers to compare")
+        return empty
+    
+    bar_colors = ["#2E8B57" if v >= 0 else "#C0392B" for v in deltas.values()]
+    fig = go.Figure(go.Bar(
+        x=list(deltas.keys()),
+        y=list(deltas.values()),
+        marker_color=bar_colors,
+        text=[f"{v:+.2f}" for v in deltas.values()],
+        textposition="auto",
+    ))
+    fig.update_layout(
+        title="Performance gap vs TSF (ours)",
+        yaxis_title="Δ (%)",
+        xaxis_title="Baseline Classifier",
+        hovermode="x unified",
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+    return fig
+
+
+def build_insights_summary(payload: dict[str, Any], dataset: str, metric_name: str = "accuracy") -> html.Div:
+    """Generate top insights for current dataset and metric."""
+    dataset_metrics = payload["metrics_by_dataset"].get(dataset, {})
+    if not dataset_metrics:
+        return html.Div("No data available for insights.", style={"color": "#999", "fontSize": "13px"})
+    
+    metric_values = {cls: data.get(metric_name, 0.0) * 100 for cls, data in dataset_metrics.items()}
+    
+    best_cls = max(metric_values, key=lambda x: metric_values[x])
+    worst_cls = min(metric_values, key=lambda x: metric_values[x])
+    tsf_value = metric_values.get("TSF (ours)")
+    
+    insights = []
+    
+    # Insight 1: Best performer
+    insights.append(f"✓ Best: {best_cls} ({metric_values[best_cls]:.2f}%)")
+    
+    # Insight 2: TSF rank
+    if tsf_value is not None:
+        sorted_metrics = sorted(metric_values.values(), reverse=True)
+        rank = sorted_metrics.index(tsf_value) + 1
+        insights.append(f"• TSF ranks #{rank}/{len(metric_values)} on {metric_name}")
+        
+        margin_vs_best = metric_values[best_cls] - tsf_value
+        if margin_vs_best > 1:
+            insights.append(f"  Gap to best: {margin_vs_best:.2f}%")
+        else:
+            insights.append(f"  TSF is competitive (gap: {margin_vs_best:.2f}%)")
+    
+    # Insight 3: Performance range
+    perf_range = metric_values[best_cls] - metric_values[worst_cls]
+    insights.append(f"• Performance range: {perf_range:.2f}% ({worst_cls} vs {best_cls})")
+    
+    return html.Div([
+        html.H5("Top Insights", style={"marginBottom": "8px", "fontSize": "13px", "fontWeight": "600"}),
+        html.Ul([html.Li(insight, style={"fontSize": "12px", "marginBottom": "4px"}) for insight in insights], style={"paddingLeft": "20px"})
+    ], style={"padding": "10px", "background": "#f5f5f5", "borderRadius": "6px", "marginTop": "10px"})
+
+
+def build_metrics_figures(payload: dict[str, Any], dataset: str, metric_name: str = "accuracy"):
+    """Build metrics bar and line charts for selected metric."""
+    metric_meta = get_metric_metadata()
+    meta = metric_meta.get(metric_name, metric_meta["accuracy"])
+    
     dataset_metrics = payload["metrics_by_dataset"].get(dataset, {})
     if not dataset_metrics:
         return go.Figure(), go.Figure(), {"best": "-", "worst": "-", "mean": "-"}
 
-    accuracies = {cls: data["accuracy"] * 100 for cls, data in dataset_metrics.items()}
-    best_cls = max(accuracies, key=lambda x: accuracies[x])
-    worst_cls = min(accuracies, key=lambda x: accuracies[x])
+    # Normalize metric value: all metrics displayed as 0-100
+    metric_values = {}
+    for cls, data in dataset_metrics.items():
+        val = data.get(metric_name, 0.0)
+        # All metrics are scaled to 0-100 for consistent display
+        metric_values[cls] = val * 100
+    
+    best_cls = max(metric_values, key=lambda x: metric_values[x])
+    worst_cls = min(metric_values, key=lambda x: metric_values[x])
 
     bar_colors = []
-    for cls in accuracies.keys():
+    for cls in metric_values.keys():
         if cls == best_cls:
             bar_colors.append("#2E8B57")
         elif cls == worst_cls:
@@ -169,24 +444,38 @@ def build_metrics_figures(payload: dict[str, Any], dataset: str):
         else:
             bar_colors.append("#4C78A8")
 
-    bar_fig = go.Figure(go.Bar(x=list(accuracies.keys()), y=list(accuracies.values()), marker_color=bar_colors))
-    bar_fig.update_layout(title=f"Accuracy for {dataset}", xaxis_title="Classifier", yaxis_title="Accuracy (%)", yaxis=dict(range=[0, 100]))
+    bar_fig = go.Figure(go.Bar(x=list(metric_values.keys()), y=list(metric_values.values()), marker_color=bar_colors))
+    bar_fig.update_layout(
+        title=f"{meta['label']} for {dataset}",
+        xaxis_title="Classifier",
+        yaxis_title=f"{meta['label']} (%)",
+        yaxis=dict(range=[0, 100])
+    )
 
     datasets_list = [d["name"] for d in payload["datasets"]]
     line_series = []
     for cls in payload["classifiers"]:
-        y = [payload["metrics_by_dataset"].get(ds, {}).get(cls, {}).get("accuracy", 0.0) * 100 for ds in datasets_list]
-        line_series.append(go.Scatter(x=datasets_list, y=y, mode="lines+markers", name=cls))
+        y_vals = []
+        for ds in datasets_list:
+            val = payload["metrics_by_dataset"].get(ds, {}).get(cls, {}).get(metric_name, 0.0)
+            # All metrics scaled to 0-100
+            y_vals.append(val * 100)
+        line_series.append(go.Scatter(x=datasets_list, y=y_vals, mode="lines+markers", name=cls))
 
     line_fig = go.Figure(line_series)
-    line_fig.update_layout(title="Accuracy across datasets", xaxis_title="Dataset", yaxis_title="Accuracy (%)", yaxis=dict(range=[0, 100]))
+    line_fig.update_layout(
+        title=f"{meta['label']} across datasets",
+        xaxis_title="Dataset",
+        yaxis_title=f"{meta['label']} (%)",
+        yaxis=dict(range=[0, 100])
+    )
 
-    mean_val = sum(accuracies.values()) / len(accuracies)
+    mean_val = sum(metric_values.values()) / len(metric_values) if metric_values else 0
 
     summary = {
-        "best": f"{best_cls} ({accuracies[best_cls]:.2f}%)",
-        "worst": f"{worst_cls} ({accuracies[worst_cls]:.2f}%)",
-        "mean": f"{mean_val:.2f}%",
+        "best": f"{best_cls} ({metric_values[best_cls]:.2f}%)" if metric_values else "-",
+        "worst": f"{worst_cls} ({metric_values[worst_cls]:.2f}%)" if metric_values else "-",
+        "mean": f"{mean_val:.2f}%" if metric_values else "-",
     }
 
     return bar_fig, line_fig, summary
@@ -319,11 +608,11 @@ def build_hyperparam_figures(hp_results: list[dict[str, Any]], dataset: str):
         best = max(method_rows, key=lambda x: x.get("best_score", 0.0))
         table_data.append({
             "method": method,
-            "best_score": best["best_score"],
-            "elapsed_seconds": best["elapsed_seconds"],
-            "best_params": json.dumps(best.get("best_params", {}), ensure_ascii=False),
+            "best_score": f"{best['best_score']*100:.2f}%",
+            "elapsed_seconds": f"{best['elapsed_seconds']:.2f}",
+            "best_params": format_params_dict(best.get("best_params", {})),
         })
-        summary_lines.append(f"{method}: {best['best_score']*100:.3f}% @ {best['elapsed_seconds']:.2f}s")
+        summary_lines.append(f"{method}: {best['best_score']*100:.2f}% @ {best['elapsed_seconds']:.2f}s")
 
     scatter_fig = go.Figure()
     entries_by_method = {method: [] for method in sorted({r["method"] for r in rows})}
@@ -377,15 +666,15 @@ def build_global_metrics_conclusion(payload: dict[str, Any]) -> str:
     tsf_rank = int(mean_acc.index.get_loc("TSF (ours)") + 1) if "TSF (ours)" in mean_acc.index else None
 
     lines = [
-        f"Global conclusion: {top_global} is the most consistent top-accuracy classifier, winning {top_global_wins} dataset(s).",
+        f"📊 {top_global} is the most consistent high-accuracy classifier, winning on {top_global_wins} dataset(s).",
     ]
 
     if tsf_mean is not None and tsf_rank is not None:
         lines.append(
-            f"TSF (ours) reaches {tsf_mean:.2f}% mean accuracy overall and ranks #{tsf_rank} by average accuracy among available classifiers."
+            f"✓ TSF (our method) achieves {tsf_mean:.2f}% mean accuracy and ranks #{tsf_rank} among all classifiers."
         )
 
-    lines.append("Recommendation: use this page to select high-accuracy candidates first, then validate deployment cost in the Timing page.")
+    lines.append("💡 Recommendation: Identify high-accuracy candidates here, then verify their computational cost in the Timing page before deployment.")
     return " ".join(lines)
 
 
@@ -411,15 +700,15 @@ def build_global_timing_conclusion(payload: dict[str, Any]) -> str:
     tsf_time_rank = int(mean_total.index.get_loc("TSF (ours)") + 1) if "TSF (ours)" in mean_total.index else None
 
     lines = [
-        f"Global conclusion: {fastest_global} is the fastest overall by total time in {fastest_wins} dataset(s).",
+        f"⚡ {fastest_global} is the fastest overall, achieving minimum execution time in {fastest_wins} dataset(s).",
     ]
 
     if tsf_mean_total is not None and tsf_time_rank is not None:
         lines.append(
-            f"TSF (ours) averages {tsf_mean_total:.2f}s total runtime and ranks #{tsf_time_rank} in speed."
+            f"✓ TSF (our method) averages {tsf_mean_total:.2f}s total runtime and ranks #{tsf_time_rank} in speed."
         )
 
-    lines.append("Recommendation: TSF is a balanced option in several datasets, but always confirm whether its accuracy gain compensates runtime against faster baselines.")
+    lines.append("💡 Recommendation: TSF offers balanced speed and accuracy in many datasets. Compare its runtime against baseline methods to ensure the accuracy gain justifies computational cost.")
     return " ".join(lines)
 
 
@@ -438,9 +727,9 @@ def build_global_hyperparam_conclusion(hp_results: list[dict[str, Any]]) -> str:
     fastest_method = str(fastest_by_method.index[0]) if not fastest_by_method.empty else "N/A"
 
     return (
-        f"Global conclusion: for TSF hyperparameter tuning, {best_method} gives the best average optimization score, "
-        f"while {fastest_method} is the fastest search strategy on average. "
-        "Recommendation: pick the best-accuracy method when quality is critical, or the fastest method for quick iteration, then retrain TSF and compare against benchmark classifiers."
+        f"🎯 For TSF hyperparameter tuning: {best_method} delivers the best optimization scores on average, "
+        f"while {fastest_method} is the fastest search strategy. "
+        "💡 Choose accuracy-focused methods for critical deployments or time-efficient methods for rapid prototyping. After tuning, validate the optimized TSF against benchmark classifiers."
     )
 
 
@@ -597,45 +886,86 @@ def generate_dataset_visual_assets(
     viz_dir: Path,
     label_filter: Any = "__all__",
     full_individual: bool = False,
-) -> tuple[html.Div, html.Div, str]:
+    n_series: int = 16,
+    selection_mode: str = "all",
+    random_state: int = 42,
+) -> tuple[html.Div, html.Div, str, html.Div]:
     dataset_viz_dir = viz_dir / dataset_name
     dataset_viz_dir.mkdir(parents=True, exist_ok=True)
 
     train_file = data_dir / dataset_name / f"{dataset_name}_TRAIN.txt"
     if not train_file.exists():
         empty = html.Div(f"Dataset split file not found: {train_file.as_posix()}", style={"color": "#a33", "fontSize": "12px"})
-        return empty, empty, "Dataset file missing"
+        return empty, empty, "Dataset file missing", empty
 
     try:
+        import numpy as np
         X_train, y_train = load_ucr_txt_dataset(train_file)
+        
+        # Store original data for info generation
+        X_train_orig = X_train.copy()
+        y_train_orig = y_train.copy()
+        
+        # Apply label filter if specified
+        if label_filter != "__all__":
+            mask = y_train == label_filter
+            X_train = X_train[mask]
+            y_train = y_train[mask]
+        
         include_labels = None if label_filter == "__all__" else [label_filter]
-        preview_n = min(32, int(X_train.shape[0]))
-        max_series = int(X_train.shape[0]) if full_individual else preview_n
+        
+        # Determine how many series to plot
+        if full_individual or n_series == -1:
+            target_n_series = len(X_train)
+        elif n_series > 0:
+            target_n_series = min(n_series, len(X_train))
+        else:
+            target_n_series = min(32, len(X_train))
+        
+        # Apply selection mode (sequential, balanced, random)
+        X_selected, y_selected = select_series_by_mode(X_train, y_train, selection_mode, target_n_series, random_state=random_state)
+        
         generate_dataset_graph(
-            X_train,
+            X_selected,
             dataset_name=dataset_name,
-            labels=y_train,
-            include_labels=include_labels,
-            max_series=max_series,
+            labels=y_selected,
+            include_labels=None,  # Already filtered above
+            max_series=len(X_selected),
             save=True,
             out_dir=dataset_viz_dir,
         )
+        
+        # Generate dataset information
+        series_length = X_train_orig.shape[1] if X_train_orig.ndim > 1 else len(X_train_orig)
+        total_ts = len(X_train_orig)
+        unique_classes, class_counts = np.unique(y_train_orig, return_counts=True)
+        class_info = ", ".join([f"Class {cls}: {count} series" for cls, count in sorted(zip(unique_classes, class_counts))])
+        
+        info_items = [
+            html.P(f"📊 Total time series: {total_ts}", style={"margin": "4px 0"}),
+            html.P(f"📏 Series length: {series_length} timestamps", style={"margin": "4px 0"}),
+            html.P(f"🏷️ Classes: {len(unique_classes)} ({class_info})", style={"margin": "4px 0"}),
+        ]
+        dataset_info_html = html.Div(info_items)
+        
         selected_label_txt = "all labels" if label_filter == "__all__" else f"label={label_filter}"
-        mode = "full individual plots" if full_individual else f"preview ({preview_n} series)"
-        status = f"TS plots generated: {mode}, {selected_label_txt}"
+        mode_name = {"all": "sequential", "balanced": "balanced", "random": "random"}.get(selection_mode, "sequential")
+        mode_txt = "full individual plots" if full_individual else f"preview ({len(X_selected)} series, {mode_name})"
+        actual_classes = len(np.unique(y_selected))
+        status = f"Displaying: {mode_txt}, {actual_classes} class(es), {selected_label_txt}"
     except Exception as exc:
         empty = html.Div(f"Error generating dataset plots: {type(exc).__name__}: {exc}", style={"color": "#a33", "fontSize": "12px"})
-        return empty, empty, f"TS plots error: {type(exc).__name__}: {exc}"
+        return empty, empty, f"TS plots error: {type(exc).__name__}: {exc}", empty
 
     overlay_block = _build_image_block(
-        "Dataset overlay (visualize_TS)",
+        f"{dataset_name} - Overlay Visualization",
         dataset_viz_dir / f"{dataset_name}_overlay.png",
     )
     grid_block = _build_image_block(
         "Individual time series (visualize_TS)",
         dataset_viz_dir / f"{dataset_name}.png",
     )
-    return overlay_block, grid_block, status
+    return overlay_block, grid_block, status, dataset_info_html
 
 
 def collect_prediction_availability(predictions_dir: Path) -> dict[str, set[str]]:
@@ -672,8 +1002,9 @@ def create_dash_app(
     hp_dir: Path,
     predictions_dir: Path,
     viz_dir: Path,
+    wilcoxon_csv: Path | None = None,
 ):
-    payload = collect_results(results_csv, data_dir)
+    payload = collect_results(results_csv, data_dir, wilcoxon_csv)
     hp_results = collect_hyperparameter_results(hp_dir)
     metrics_conclusion = build_global_metrics_conclusion(payload)
     timing_conclusion = build_global_timing_conclusion(payload)
@@ -686,13 +1017,20 @@ def create_dash_app(
     app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
     app.layout = html.Div([
-        html.Div([html.H1("Time Series Classifier Dashboard (3 pages)")], className="header"),
+        html.Div([html.H1("Time Series Classifier Dashboard")], className="header"),
         dcc.Tabs(id="tabs", value="tab-metrics", children=[
             dcc.Tab(label="Metrics", value="tab-metrics"),
             dcc.Tab(label="Timing", value="tab-timing"),
             dcc.Tab(label="Hyperparameter", value="tab-hyperparam"),
             dcc.Tab(label="Datasets", value="tab-datasets"),
         ], className="tabs-bar"),
+        html.Div(
+            [
+                html.P("Welcome. This dashboard is designed for interactive exploration of time-series classification benchmarks.", style={"margin": "0 0 6px 0", "fontWeight": "600"}),
+                html.P("How to explore: start with Metrics (quality), continue with Timing (cost), check Hyperparameter (search behavior), and finish with Datasets (raw signal structure).", style={"margin": "0"}),
+            ],
+            style={"marginTop": "14px", "padding": "10px 12px", "border": "1px solid #d9d9d9", "borderRadius": "8px", "background": "#fbfbfb", "color": "#333"},
+        ),
         html.Div(id="tab-content", style={"marginTop": "20px", "padding": "12px"}),
         html.Div([
             html.Hr(),
@@ -715,30 +1053,54 @@ def create_dash_app(
     def render_tab(tab):
         if tab == "tab-metrics":
             ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
+            metric_meta = get_metric_metadata()
+            metric_opts = [{"label": meta["label"], "value": key} for key, meta in metric_meta.items()]
             return html.Div([
-                html.Div([html.P("Metrics tab provides global accuracy trends first, then a selected-dataset breakdown with data size details." )], style={"marginBottom": "10px", "color": "#444"}),
-                dcc.Graph(id="metrics-line"),
                 html.Div([
+                    html.P("Metrics page: compare model quality across datasets and classifiers.", style={"margin": "0 0 4px 0", "fontWeight": "600"}),
+                    html.P("Use Metric and Dataset selectors to update all main charts. The line chart summarizes behavior across datasets, the bar chart compares classifiers in one dataset, and the Wilcoxon panel highlights statistical significance.", style={"margin": "0"}),
+                ], style={"marginBottom": "10px", "color": "#444"}),
+                html.Div([
+                    html.Div([
+                        html.Label("Metric"),
+                        dcc.Dropdown(id="metrics-metric", options=metric_opts, value="accuracy", clearable=False),
+                    ], style={"flex": "0 0 22%"}),
                     html.Div([
                         html.Label("Dataset"),
                         dcc.Dropdown(id="metrics-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False),
-                        html.Div(id="metrics-dataset-info", style={"marginTop": "10px", "marginBottom": "8px", "color": "#444"}),
+                    ], style={"flex": "0 0 22%"}),
+                    html.Div([
+                        html.Div(id="metrics-dataset-info", style={"marginTop": "2px", "color": "#444", "fontSize": "13px"}),
                         html.Div(id="metrics-summary", style={"marginTop": "4px"}),
-                    ], style={"flex": "0 0 32%", "paddingRight": "12px"}),
+                    ], style={"flex": "1", "paddingLeft": "8px"}),
+                ], style={"display": "flex", "gap": "10px", "alignItems": "flex-end", "marginTop": "6px"}),
+                html.Div(
+                    "Interpretation tip: higher values are better for Metrics. Use the delta chart to see how each baseline differs from TSF in the selected dataset.",
+                    style={"marginTop": "8px", "padding": "8px 10px", "border": "1px solid #e0e0e0", "borderRadius": "6px", "background": "#fcfcfc", "color": "#4a4a4a", "fontSize": "12px"},
+                ),
+                html.Div([
+                    html.Div([
+                        dcc.Graph(id="metrics-line"),
+                    ], style={"flex": "1"}),
                     html.Div([
                         dcc.Graph(id="metrics-bar"),
                     ], style={"flex": "1"}),
-                ], style={"display": "flex", "alignItems": "flex-start"}),
+                ], style={"display": "flex", "gap": "12px", "alignItems": "flex-start", "marginTop": "10px"}),
                 html.Div(
                     metrics_conclusion,
                     style={"marginTop": "14px", "padding": "12px", "background": "#f9f9f9", "border": "1px solid #ddd", "borderRadius": "8px", "color": "#333"},
                 ),
+                html.Div(id="metrics-wilcoxon-panel", style={"marginTop": "14px"}),
+                html.Div([
+                    html.Div([dcc.Graph(id="metrics-delta-chart")], style={"flex": "1"}),
+                    html.Div(id="metrics-insights", style={"flex": "1", "paddingLeft": "12px"}),
+                ], style={"display": "flex", "gap": "12px", "marginTop": "14px", "alignItems": "flex-start"}),
                 html.Div([
                     html.Div([
                         html.Label("Classifier"),
                         dcc.Dropdown(id="metrics-classifier", clearable=False),
-                    ], style={"width": "38%", "display": "inline-block", "verticalAlign": "top"}),
-                    html.Div(id="metrics-pred-status", style={"width": "58%", "display": "inline-block", "marginLeft": "4%", "marginTop": "22px", "color": "#444", "fontSize": "12px"}),
+                    ], style={"width": "35%", "display": "inline-block", "verticalAlign": "top"}),
+                    html.Div(id="metrics-pred-status", style={"width": "61%", "display": "inline-block", "marginLeft": "4%", "marginTop": "22px", "color": "#444", "fontSize": "12px"}),
                 ], style={"marginTop": "12px", "marginBottom": "8px"}),
                 html.Div(id="metrics-pred-images"),
             ])
@@ -746,18 +1108,20 @@ def create_dash_app(
             ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
             metric_opts = [{"label": "Train", "value": "train"}, {"label": "Predict", "value": "predict"}, {"label": "Total", "value": "total"}]
             return html.Div([
-                html.Div([html.P("Timing tab shows model training and prediction timings for the selected dataset. Use metric selector to switch between train/predict/total timing charts." )], style={"marginBottom": "10px", "color": "#444"}),
+                html.Div([
+                    html.P("Timing page: analyze computational cost.", style={"margin": "0 0 4px 0", "fontWeight": "600"}),
+                    html.P("Select a dataset and timing metric (Train, Predict, Total). Bubble size encodes runtime, horizontal bars compare techniques, and profile bars show per-dataset timing details.", style={"margin": "0"}),
+                ], style={"marginBottom": "10px", "color": "#444"}),
                 html.Div([
                     html.Div([html.Label("Dataset"), dcc.Dropdown(id="timing-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "45%", "display": "inline-block"}),
                     html.Div([html.Label("Metric"), dcc.Dropdown(id="timing-metric", options=metric_opts, value="total", clearable=False)], style={"width": "45%", "display": "inline-block", "marginLeft": "20px"}),
                 ]),
-                html.Div([html.Button("Mostrar/bloquear otros gráficos", id="toggle-graphs", n_clicks=0, style=button_style)], style={"margin":"10px 0"}),
                 html.Div([html.P("Bubble chart: each point represents a dataset/technique pair. X=dataset size, Y=series length, size=time depending on selected metric.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"})]),
                 dcc.Graph(id="timing-bubble"),
                 html.Div([
                     html.Div([html.P("Stacked horizontal bar chart: technique timings according to selected metric.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"}), dcc.Graph(id="timing-bar", style={"height": "480px"})], style={"flex": "1", "paddingRight": "10px"}),
                     html.Div([html.P("Profile chart: per-dataset total or individual timing bars by technique.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"}), dcc.Graph(id="timing-profile", style={"height": "480px"})], style={"flex": "1", "paddingLeft": "10px"}),
-                ], id="timing-extra-graphs", style={"display":"flex", "flexDirection":"row", "alignItems": "flex-start"}),
+                ], id="timing-extra-graphs", style={"display":"flex", "flexDirection":"row", "alignItems": "flex-start", "marginTop": "14px"}),
                 html.Div(
                     timing_conclusion,
                     style={"marginTop": "14px", "padding": "12px", "background": "#f9f9f9", "border": "1px solid #ddd", "borderRadius": "8px", "color": "#333"},
@@ -766,7 +1130,10 @@ def create_dash_app(
         ds_opts = [{"label": d["name"], "value": d["name"]} for d in payload["datasets"]]
         if tab == "tab-hyperparam":
             return html.Div([
-                html.Div([html.P("Hyperparameter tab visualizes best obtained score and elapsed time for optimization methods. Use this view to compare search quality and training speed.")], style={"marginBottom": "10px", "color": "#444"}),
+                html.Div([
+                    html.P("Hyperparameter page: compare optimization strategies.", style={"margin": "0 0 4px 0", "fontWeight": "600"}),
+                    html.P("For the selected dataset, the table reports each method's best score, runtime, and best parameter configuration. The scatter chart helps you inspect score-vs-time behavior during search.", style={"margin": "0"}),
+                ], style={"marginBottom": "10px", "color": "#444"}),
                 html.Div([html.Label("Dataset"), dcc.Dropdown(id="hp-dataset", options=ds_opts, value=ds_opts[0]["value"], clearable=False)], style={"width": "30%", "marginBottom": "10px"}),
                 dash_table.DataTable(id="hp-table", columns=[{"name": "Method", "id": "method"}, {"name": "Best Score", "id": "best_score"}, {"name": "Elapsed s", "id": "elapsed_seconds"}, {"name": "Best params", "id": "best_params"}], style_table={"overflowX": "auto"}, style_cell={"textAlign": "left", "fontSize": "13px"}),
                 html.Div([html.P("Scatter chart: each point is an hyperparameter trial; x=elapsed time, y=accuracy; bigger points are best accuracy for method.", style={"fontStyle": "italic", "marginBottom": "8px", "color": "#333"})]),
@@ -779,11 +1146,38 @@ def create_dash_app(
             ])
 
         return html.Div([
-            html.Div([html.P("Datasets tab embeds outputs from visualize_TS.py for selected dataset." )], style={"marginBottom": "10px", "color": "#444"}),
             html.Div([
-                html.Div([html.Label("Dataset"), dcc.Dropdown(id="datasets-dataset", options=ds_opts, value=default_viz_dataset, clearable=False)], style={"width": "40%", "display": "inline-block"}),
-                html.Div([html.Button("Show all individual time series", id="datasets-plot-all", n_clicks=0, style=button_style)], style={"width": "40%", "display": "inline-block", "marginLeft": "20px", "paddingTop": "22px"}),
+                html.P("Datasets page: inspect raw time-series patterns.", style={"margin": "0 0 4px 0", "fontWeight": "600"}),
+                html.P("Choose dataset, sample size (N series), and sampling mode. Use label filtering to focus on a specific class. Overlay plots summarize global shape and variability; this helps contextualize model behavior seen in other tabs.", style={"margin": "0"}),
+            ], style={"marginBottom": "10px", "color": "#444"}),
+            html.Div([
+                html.Div([html.Label("Dataset"), dcc.Dropdown(id="datasets-dataset", options=ds_opts, value=default_viz_dataset, clearable=False)], style={"width": "30%", "display": "inline-block"}),
+                html.Div([html.Label("N series"), dcc.Dropdown(id="datasets-n-series", options=[{"label": "8 (small preview)", "value": 8}, {"label": "16 (preview)", "value": 16}, {"label": "32 (medium)", "value": 32}, {"label": "64 (large)", "value": 64}, {"label": "All", "value": -1}], value=16, clearable=False)], style={"width": "20%", "display": "inline-block", "marginLeft": "15px"}),
             ], style={"marginBottom": "12px"}),
+            html.Div([
+                html.Label("Selection mode"),
+                dcc.RadioItems(
+                    id="datasets-selection-mode",
+                    options=[
+                        {"label": "Sequential", "value": "all"},
+                        {"label": "Balanced per class", "value": "balanced"},
+                        {"label": "Random", "value": "random"},
+                    ],
+                    value="all",
+                    inline=True,
+                    inputStyle={"transform": "scale(1.45)", "marginRight": "8px"},
+                    labelStyle={
+                        "display": "inline-flex",
+                        "alignItems": "center",
+                        "marginRight": "20px",
+                        "fontSize": "14px",
+                    },
+                ),
+                html.Div([
+                    html.Label("Random seed:", style={"marginLeft": "40px", "marginRight": "8px", "fontSize": "13px"}),
+                    dcc.Input(id="datasets-random-seed", type="number", placeholder="42", value=42, style={"width": "60px", "padding": "4px", "fontSize": "12px", "borderRadius": "4px", "border": "1px solid #ccc"}),
+                ], style={"display": "inline-flex", "alignItems": "center", "marginLeft": "10px"}),
+            ], style={"marginBottom": "10px", "color": "#444", "fontSize": "12px"}),
             html.Div([
                 html.Label("Label filter"),
                 dcc.RadioItems(
@@ -799,12 +1193,14 @@ def create_dash_app(
                     },
                 ),
             ], style={"marginBottom": "10px", "color": "#444", "fontSize": "12px"}),
-            html.Div("Plots are displayed below this control panel.", style={"marginBottom": "8px", "color": "#555", "fontSize": "12px"}),
+            html.Div("Plots are displayed below this control panel. Note: selecting large N or All may take longer to render; the loading spinner indicates active processing.", style={"marginBottom": "8px", "color": "#555", "fontSize": "12px"}),
+            html.Div(id="datasets-info", style={"marginBottom": "10px", "padding": "10px", "background": "#f9f9f9", "borderRadius": "6px", "border": "1px solid #ddd"}),
             html.Div(id="datasets-status", style={"marginBottom": "10px", "color": "#444", "fontSize": "12px"}),
-            html.Div([
-                html.Div(id="datasets-overlay-image", style={"flex": "1.25"}),
-                html.Div(id="datasets-individual-image", style={"display": "none", "flex": "1"}),
-            ], style={"display": "flex", "gap": "12px", "alignItems": "flex-start"}),
+            dcc.Loading(
+                id="datasets-loading",
+                type="circle",
+                children=html.Div(id="datasets-overlay-image", style={"marginTop": "12px"}),
+            ),
         ])
 
     @app.callback(
@@ -839,11 +1235,13 @@ def create_dash_app(
             Output("metrics-pred-images", "children"),
             Output("metrics-pred-status", "children"),
         ],
-        [Input("metrics-dataset", "value"), Input("metrics-classifier", "value")],
+        [Input("metrics-metric", "value"), Input("metrics-dataset", "value"), Input("metrics-classifier", "value")],
     )
-    def update_metrics(dataset_value, classifier_value):
-        fig_bar, fig_line, summary = build_metrics_figures(payload, dataset_value)
-        summary_el = html.Div([html.P(f"Best classifier: {summary['best']}"), html.P(f"Worst classifier: {summary['worst']}"), html.P(f"Mean accuracy: {summary['mean']}")])
+    def update_metrics(metric_value, dataset_value, classifier_value):
+        fig_bar, fig_line, summary = build_metrics_figures(payload, dataset_value, metric_value)
+        metric_meta = get_metric_metadata()
+        meta = metric_meta.get(metric_value, metric_meta["accuracy"])
+        summary_el = html.Div([html.P(f"Best classifier: {summary['best']}"), html.P(f"Worst classifier: {summary['worst']}"), html.P(f"Mean {meta['label']}: {summary['mean']}")])
         ds_stats = next((d for d in payload["datasets"] if d["name"] == dataset_value), None)
         if ds_stats is None:
             dataset_info = html.P("Dataset details not available")
@@ -890,6 +1288,28 @@ def create_dash_app(
         return fig_bar, fig_line, summary_el, dataset_info, pred_images, pred_status
 
     @app.callback(
+        Output("metrics-wilcoxon-panel", "children"),
+        [Input("metrics-metric", "value")],
+    )
+    def update_wilcoxon_panel(metric_value):
+        wilcoxon_df = payload.get("wilcoxon_results")
+        return build_wilcoxon_panel(wilcoxon_df, metric_value)
+
+    @app.callback(
+        Output("metrics-delta-chart", "figure"),
+        [Input("metrics-metric", "value"), Input("metrics-dataset", "value")],
+    )
+    def update_delta_chart(metric_value, dataset_value):
+        return build_metrics_delta_chart(payload, dataset_value, metric_value)
+
+    @app.callback(
+        Output("metrics-insights", "children"),
+        [Input("metrics-metric", "value"), Input("metrics-dataset", "value")],
+    )
+    def update_insights(metric_value, dataset_value):
+        return build_insights_summary(payload, dataset_value, metric_value)
+
+    @app.callback(
         [
             Output("timing-bar", "figure"),
             Output("timing-bubble", "figure"),
@@ -900,15 +1320,7 @@ def create_dash_app(
     def update_timing(dataset_value, metric_value):
         return build_timing_figures(payload, dataset_value, metric_value)
 
-    @app.callback(
-        Output("timing-extra-graphs", "style"),
-        [Input("toggle-graphs", "n_clicks")],
-        prevent_initial_call=True
-    )
-    def toggle_timing_extra(n_clicks):
-        if n_clicks % 2 == 0:
-            return {"display": "block"}
-        return {"display": "none"}
+
 
     @app.callback(
         [
@@ -923,43 +1335,21 @@ def create_dash_app(
         return table_data, scatter_fig, summary_text
 
     @app.callback(
-        [Output("datasets-overlay-image", "children"), Output("datasets-status", "children")],
-        [Input("datasets-dataset", "value"), Input("datasets-label-filter", "value")],
+        [Output("datasets-overlay-image", "children"), Output("datasets-status", "children"), Output("datasets-info", "children")],
+        [Input("datasets-dataset", "value"), Input("datasets-label-filter", "value"), Input("datasets-n-series", "value"), Input("datasets-selection-mode", "value"), Input("datasets-random-seed", "value")],
     )
-    def update_dataset_overlay(dataset_value, label_filter):
-        overlay_block, _grid_block, status = generate_dataset_visual_assets(
+    def update_dataset_overlay(dataset_value, label_filter, n_series, selection_mode, random_seed):
+        overlay_block, _grid_block, status, dataset_info_html = generate_dataset_visual_assets(
             dataset_name=dataset_value,
             data_dir=data_dir,
             viz_dir=viz_dir,
             label_filter=label_filter,
             full_individual=False,
+            n_series=n_series,
+            selection_mode=selection_mode,
+            random_state=int(random_seed) if random_seed else 42,
         )
-        return [overlay_block], status
-
-    @app.callback(
-        [
-            Output("datasets-individual-image", "children"),
-            Output("datasets-individual-image", "style"),
-            Output("datasets-plot-all", "children"),
-        ],
-        [
-            Input("datasets-plot-all", "n_clicks"),
-            Input("datasets-dataset", "value"),
-            Input("datasets-label-filter", "value"),
-        ],
-    )
-    def update_dataset_individual(n_clicks, dataset_value, label_filter):
-        if not n_clicks or n_clicks % 2 == 0:
-            return [], {"display": "none"}, "Show all individual time series"
-
-        _overlay_block, grid_block, _status = generate_dataset_visual_assets(
-            dataset_name=dataset_value,
-            data_dir=data_dir,
-            viz_dir=viz_dir,
-            label_filter=label_filter,
-            full_individual=True,
-        )
-        return [grid_block], {"display": "block", "flex": "1"}, "Hide individual time series"
+        return [overlay_block], status, dataset_info_html
 
     return app
 
@@ -971,6 +1361,7 @@ def main():
     parser.add_argument("--hp-dir", default="results")
     parser.add_argument("--predictions-dir", default="results/predictions")
     parser.add_argument("--viz-dir", default="visualization")
+    parser.add_argument("--wilcoxon", default="results/benchmark_comparison_wilcoxon.csv", help="Path to Wilcoxon test results CSV")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8050, type=int)
     parser.add_argument("--debug", action="store_true")
@@ -982,6 +1373,7 @@ def main():
         Path(args.hp_dir),
         Path(args.predictions_dir),
         Path(args.viz_dir),
+        Path(args.wilcoxon) if args.wilcoxon else None,
     )
     app.run(host=args.host, port=args.port, debug=args.debug)
 
